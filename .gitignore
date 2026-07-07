@@ -1,0 +1,26 @@
+# Rust / Cargo build output
+/target/
+**/target/
+**/*.rs.bk
+
+# Compiler crash dumps
+rustc-ice-*.txt
+
+# Cargo.lock is intentionally committed: jotter is an application (binary),
+# so we pin exact dependency versions. Do not add Cargo.lock here.
+
+# jotter runtime artifacts (should never live in the source tree, but guard anyway)
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS cruft
+.DS_Store
+Thumbs.db

@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="jotter">
+  <defs>
+    <clipPath id="squircle"><rect x="0" y="0" width="512" height="512" rx="115"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20232e"/>
+      <stop offset="1" stop-color="#15171f"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7c5336"/>
+      <stop offset="1" stop-color="#583725"/>
+    </linearGradient>
+    <radialGradient id="head" cx="0.5" cy="0.42" r="0.62">
+      <stop offset="0" stop-color="#efe6d6"/>
+      <stop offset="0.75" stop-color="#ddceb5"/>
+      <stop offset="1" stop-color="#c9b699"/>
+    </radialGradient>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <rect x="0" y="0" width="512" height="512" fill="url(#bg)"/>
+
+    <!-- river -->
+    <path d="M-12 452 C 60 432 108 470 176 452 S 300 432 352 452 S 470 472 524 452 L 524 524 L -12 524 Z" fill="#1f6f86"/>
+    <path d="M-12 452 C 60 432 108 470 176 452 S 300 432 352 452 S 470 472 524 452" fill="none" stroke="#2fb6d6" stroke-width="5" stroke-linecap="round" opacity="0.7"/>
+    <path d="M64 486 q22 -14 44 0 M300 494 q22 -14 44 0" fill="none" stroke="#2fb6d6" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+
+    <!-- tail dipping into the water -->
+    <path d="M298 372 C 356 404 372 452 424 452 C 388 452 356 428 320 410 Z" fill="#4d3120"/>
+
+    <!-- body (dark, belly up) -->
+    <ellipse cx="256" cy="324" rx="120" ry="146" fill="url(#body)"/>
+    <!-- wet lighter chest patch -->
+    <ellipse cx="256" cy="332" rx="92" ry="120" fill="#8a6244"/>
+
+    <!-- paws (dark, wet) tucked to hold the page -->
+    <ellipse cx="150" cy="322" rx="26" ry="19" fill="#4a3020" transform="rotate(-18 150 322)"/>
+    <ellipse cx="362" cy="322" rx="26" ry="19" fill="#4a3020" transform="rotate(18 362 322)"/>
+
+    <!-- page on the chest -->
+    <g>
+      <rect x="188" y="256" width="136" height="150" rx="16" fill="#f5ece0"/>
+      <rect x="188" y="256" width="136" height="150" rx="16" fill="none" stroke="#d8cbb9" stroke-width="2"/>
+      <g stroke="#ee64ac" stroke-width="6" stroke-linecap="round">
+        <line x1="212" y1="286" x2="208" y2="312"/>
+        <line x1="228" y1="286" x2="224" y2="312"/>
+        <line x1="203" y1="294" x2="233" y2="294"/>
+        <line x1="201" y1="304" x2="231" y2="304"/>
+      </g>
+      <rect x="244" y="290" width="58" height="14" rx="7" fill="#ee64ac" opacity="0.9"/>
+      <rect x="208" y="330" width="96" height="9" rx="4.5" fill="#b7ac9c"/>
+      <rect x="208" y="350" width="96" height="9" rx="4.5" fill="#b7ac9c"/>
+      <rect x="208" y="370" width="44" height="9" rx="4.5" fill="#b7ac9c"/>
+      <rect x="262" y="366" width="7" height="18" rx="2" fill="#26bbd9"/>
+    </g>
+
+    <!-- pen laid across, nib pointing at the page -->
+    <g transform="rotate(-32 256 300)">
+      <rect x="244" y="286" width="24" height="150" rx="12" fill="#2e3140"/>
+      <rect x="250" y="286" width="6" height="150" rx="3" fill="#4a4e63"/>
+      <path d="M244 286 L268 286 L256 258 Z" fill="#d7d9e2"/>
+      <line x1="256" y1="286" x2="256" y2="270" stroke="#2e3140" stroke-width="3"/>
+      <circle cx="256" cy="292" r="5" fill="#59e3e3"/>
+    </g>
+
+    <!-- tiny ears, low and to the sides (drawn behind head so only nubs show) -->
+    <circle cx="184" cy="150" r="20" fill="#7c5336"/>
+    <circle cx="328" cy="150" r="20" fill="#7c5336"/>
+
+    <!-- pale frosted head -->
+    <circle cx="256" cy="168" r="84" fill="url(#head)"/>
+
+    <!-- broad muzzle, slightly brighter -->
+    <ellipse cx="256" cy="202" rx="54" ry="42" fill="#f3ecdf"/>
+
+    <!-- large dark nose pad -->
+    <path d="M234 182 q22 -16 44 0 q6 18 -22 30 q-28 -12 -22 -30 Z" fill="#2c1e18"/>
+    <line x1="256" y1="212" x2="256" y2="226" stroke="#2c1e18" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- round dark eyes, set wide, with catchlights -->
+    <circle cx="218" cy="158" r="11" fill="#241812"/>
+    <circle cx="294" cy="158" r="11" fill="#241812"/>
+    <circle cx="214" cy="154" r="3.4" fill="#fff" opacity="0.9"/>
+    <circle cx="290" cy="154" r="3.4" fill="#fff" opacity="0.9"/>
+
+    <!-- long whiskers -->
+    <g stroke="#5a4636" stroke-width="3" stroke-linecap="round" opacity="0.85" fill="none">
+      <path d="M226 208 C 196 206 172 202 150 196"/>
+      <path d="M226 216 C 198 218 174 220 152 222"/>
+      <path d="M226 224 C 200 230 178 238 158 246"/>
+      <path d="M286 208 C 316 206 340 202 362 196"/>
+      <path d="M286 216 C 314 218 338 220 360 222"/>
+      <path d="M286 224 C 312 230 334 238 354 246"/>
+    </g>
+  </g>
+</svg>
