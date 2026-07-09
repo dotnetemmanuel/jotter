@@ -1,0 +1,91 @@
+---
+source: crates/theming/tests/generators.rs
+expression: "resolve(\"retro82\", Mode::Light).to_gtk_css()"
+---
+/* retro82 light */
+window {
+  background-color: #f6e8cd;
+  color: #0a2138;
+  font-family: Inter, sans-serif;
+  font-size: 15px;
+}
+
+headerbar {
+  background-color: #ecdcb8;
+  background-image: none;
+  color: #0a2138;
+  border-bottom: 2px solid #0a2138;
+  box-shadow: none;
+}
+
+.sidebar {
+  background-color: #ecdcb8;
+  border-right: 2px solid #0a2138;
+}
+
+button {
+  background-color: #ecdcb8;
+  background-image: none;
+  color: #0a2138;
+  border: 2px solid #0a2138;
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 #0a2138;
+  padding: 4px 10px;
+}
+
+button:hover {
+  background-color: #d8c49a;
+}
+
+button:active {
+  box-shadow: 0 0 0 #0a2138;
+}
+
+button.suggested-action {
+  background-color: #d9762b;
+  background-image: none;
+  color: #f6e8cd;
+}
+
+button.suggested-action:hover {
+  background-color: #d9762b;
+}
+
+button.destructive-action {
+  background-color: #d83a12;
+  background-image: none;
+  color: #f6e8cd;
+}
+
+button.destructive-action:hover {
+  background-color: #d83a12;
+}
+
+entry {
+  background-color: #f6e8cd;
+  background-image: none;
+  color: #0a2138;
+  border: 2px solid #0a2138;
+  border-radius: 10px;
+  padding: 4px 8px;
+}
+
+entry:focus-within {
+  border-color: #0d6e78;
+  box-shadow: 4px 4px 0 #0d6e78;
+}
+
+popover > contents {
+  background-color: #d8c49a;
+  color: #0a2138;
+  border: 2px solid #0a2138;
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 #0a2138;
+}
+
+tooltip {
+  background-color: #d8c49a;
+  color: #0a2138;
+  border: 2px solid #0a2138;
+  border-radius: 10px;
+}

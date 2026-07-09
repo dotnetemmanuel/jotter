@@ -1,0 +1,91 @@
+---
+source: crates/theming/tests/generators.rs
+expression: "resolve(\"event-horizon\", Mode::Dark).to_gtk_css()"
+---
+/* Event Horizon dark */
+window {
+  background-color: #1c1e26;
+  color: #fadad1;
+  font-family: Inter, sans-serif;
+  font-size: 15px;
+}
+
+headerbar {
+  background-color: #232530;
+  background-image: none;
+  color: #fadad1;
+  border-bottom: 2px solid #fadad1;
+  box-shadow: none;
+}
+
+.sidebar {
+  background-color: #232530;
+  border-right: 2px solid #fadad1;
+}
+
+button {
+  background-color: #232530;
+  background-image: none;
+  color: #fadad1;
+  border: 2px solid #fadad1;
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 #fadad1;
+  padding: 4px 10px;
+}
+
+button:hover {
+  background-color: #2e303e;
+}
+
+button:active {
+  box-shadow: 0 0 0 #fadad1;
+}
+
+button.suggested-action {
+  background-color: #ee64ac;
+  background-image: none;
+  color: #1c1e26;
+}
+
+button.suggested-action:hover {
+  background-color: #ee64ac;
+}
+
+button.destructive-action {
+  background-color: #e95678;
+  background-image: none;
+  color: #1c1e26;
+}
+
+button.destructive-action:hover {
+  background-color: #e95678;
+}
+
+entry {
+  background-color: #1c1e26;
+  background-image: none;
+  color: #fadad1;
+  border: 2px solid #fadad1;
+  border-radius: 10px;
+  padding: 4px 8px;
+}
+
+entry:focus-within {
+  border-color: #26bbd9;
+  box-shadow: 4px 4px 0 #26bbd9;
+}
+
+popover > contents {
+  background-color: #2e303e;
+  color: #fadad1;
+  border: 2px solid #fadad1;
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 #fadad1;
+}
+
+tooltip {
+  background-color: #2e303e;
+  color: #fadad1;
+  border: 2px solid #fadad1;
+  border-radius: 10px;
+}

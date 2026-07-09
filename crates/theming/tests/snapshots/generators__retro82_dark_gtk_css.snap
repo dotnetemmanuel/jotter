@@ -1,0 +1,91 @@
+---
+source: crates/theming/tests/generators.rs
+expression: "resolve(\"retro82\", Mode::Dark).to_gtk_css()"
+---
+/* retro82 dark */
+window {
+  background-color: #05182e;
+  color: #f6dcac;
+  font-family: Inter, sans-serif;
+  font-size: 15px;
+}
+
+headerbar {
+  background-color: #0a2138;
+  background-image: none;
+  color: #f6dcac;
+  border-bottom: 2px solid #f6dcac;
+  box-shadow: none;
+}
+
+.sidebar {
+  background-color: #0a2138;
+  border-right: 2px solid #f6dcac;
+}
+
+button {
+  background-color: #0a2138;
+  background-image: none;
+  color: #f6dcac;
+  border: 2px solid #f6dcac;
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 #f6dcac;
+  padding: 4px 10px;
+}
+
+button:hover {
+  background-color: #134e5a;
+}
+
+button:active {
+  box-shadow: 0 0 0 #f6dcac;
+}
+
+button.suggested-action {
+  background-color: #faa968;
+  background-image: none;
+  color: #05182e;
+}
+
+button.suggested-action:hover {
+  background-color: #faa968;
+}
+
+button.destructive-action {
+  background-color: #f85525;
+  background-image: none;
+  color: #05182e;
+}
+
+button.destructive-action:hover {
+  background-color: #f85525;
+}
+
+entry {
+  background-color: #05182e;
+  background-image: none;
+  color: #f6dcac;
+  border: 2px solid #f6dcac;
+  border-radius: 10px;
+  padding: 4px 8px;
+}
+
+entry:focus-within {
+  border-color: #3f8f8a;
+  box-shadow: 4px 4px 0 #3f8f8a;
+}
+
+popover > contents {
+  background-color: #134e5a;
+  color: #f6dcac;
+  border: 2px solid #f6dcac;
+  border-radius: 10px;
+  box-shadow: 4px 4px 0 #f6dcac;
+}
+
+tooltip {
+  background-color: #134e5a;
+  color: #f6dcac;
+  border: 2px solid #f6dcac;
+  border-radius: 10px;
+}

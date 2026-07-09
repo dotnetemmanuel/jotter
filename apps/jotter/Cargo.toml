@@ -8,4 +8,5 @@ name = "jotter"
 path = "src/main.rs"
 
 [dependencies]
-gtk = { version = "0.11.4", package = "gtk4", features = ["v4_6"] }
+gtk = { version = "0.11.4", package = "gtk4", features = ["v4_12"] }
+jotter-theming = { path = "../../crates/theming" }

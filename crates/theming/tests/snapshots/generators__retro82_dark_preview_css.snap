@@ -1,0 +1,74 @@
+---
+source: crates/theming/tests/generators.rs
+expression: "resolve(\"retro82\", Mode::Dark).to_preview_css()"
+---
+/* retro82 dark */
+:root { color-scheme: dark; }
+
+body {
+  margin: 0;
+  padding: 2rem;
+  background: #05182e;
+  color: #f6dcac;
+  font-family: serif;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #f6dcac;
+  line-height: 1.25;
+}
+
+a {
+  color: #3f8f8a;
+}
+
+a.broken-link {
+  color: #6d8f8a;
+  text-decoration: underline dashed;
+}
+
+code {
+  font-family: monospace;
+  background: #103049;
+  padding: 0.15em 0.35em;
+  border-radius: 6px;
+}
+
+pre {
+  background: #103049;
+  padding: 1rem;
+  border-radius: 10px;
+  overflow: auto;
+}
+
+pre code {
+  background: transparent;
+  padding: 0;
+}
+
+blockquote {
+  margin: 1rem 0;
+  padding: 0.25rem 1rem;
+  border-left: 4px solid #faa968;
+  color: #6d8f8a;
+}
+
+hr {
+  border: none;
+  border-top: 2px solid #134e5a;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+th, td {
+  border: 1px solid #134e5a;
+  padding: 0.4rem 0.6rem;
+}
+
+img {
+  max-width: 100%;
+}

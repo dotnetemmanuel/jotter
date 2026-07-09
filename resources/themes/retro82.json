@@ -1,0 +1,112 @@
+// jotter theme: retro82 (default). Two modes in one file.
+// Color tokens live per mode under "palette". The structural sections below
+// reference those tokens with $name, so one definition resolves to a full
+// light or dark theme depending on the selected mode.
+{
+  "id": "retro82",
+  "label": "retro82",
+  "default_mode": "dark",
+
+  "palette": {
+    "dark": {
+      "base": "#05182e",
+      "surface": "#0a2138",
+      "overlay": "#134e5a",
+      "text": "#f6dcac",
+      "muted": "#6d8f8a",
+      "primary": "#faa968",
+      "focus": "#3f8f8a",
+      "info": "#8cbfb8",
+      "success": "#028391",
+      "warning": "#e97b3c",
+      "danger": "#f85525",
+      "accent2": "#6a9d97",
+      "codeBg": "#103049"
+    },
+    "light": {
+      "base": "#f6e8cd",
+      "surface": "#ecdcb8",
+      "overlay": "#d8c49a",
+      "text": "#0a2138",
+      "muted": "#5f7d84",
+      "primary": "#d9762b",
+      "focus": "#0d6e78",
+      "info": "#17808f",
+      "success": "#0a7d6b",
+      "warning": "#c85f22",
+      "danger": "#d83a12",
+      "accent2": "#3f7d78",
+      "codeBg": "#e6d2a2"
+    }
+  },
+
+  "chrome": {
+    "background": "$base",
+    "surface": "$surface",
+    "overlay": "$overlay",
+    "text": "$text",
+    "muted": "$muted",
+    "accent": "$primary",
+    "focus": "$focus",
+    "border": "$text",
+    "danger": "$danger",
+    "radius": 10,
+    "border_width": 2,
+    "shadow_offset": 4
+  },
+
+  "editor": {
+    "background": "$base",
+    "foreground": "$text",
+    "cursor": "$primary",
+    "current_line": "$surface",
+    "selection": "$overlay",
+    "right_margin": "$overlay",
+    "line_number": "$muted",
+    "line_number_current": "$text",
+    "syntax": {
+      "heading": "$primary",
+      "emphasis": "$accent2",
+      "strong": "$primary",
+      "link": "$focus",
+      "inline_code": "$accent2",
+      "block_quote": "$muted",
+      "list_marker": "$info",
+      "thematic_break": "$overlay",
+      "comment": "$muted"
+    }
+  },
+
+  "preview": {
+    "background": "$base",
+    "foreground": "$text",
+    "heading": "$text",
+    "link": "$focus",
+    "muted": "$muted",
+    "code_background": "$codeBg",
+    "quote_border": "$primary",
+    "rule": "$overlay",
+    "table_border": "$overlay"
+  },
+
+  "code": {
+    "background": "$codeBg",
+    "foreground": "$text",
+    "keyword": "$primary",
+    "string": "$success",
+    "comment": "$muted",
+    "function": "$focus",
+    "number": "$warning",
+    "type": "$info",
+    "variable": "$text"
+  },
+
+  "typography": {
+    "ui_font": "Inter, sans-serif",
+    "editor_font": "monospace",
+    "preview_font": "serif",
+    "mono_font": "monospace",
+    "font_size": 15,
+    "line_height": 1.6
+  }
+}

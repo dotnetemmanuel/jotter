@@ -88,10 +88,12 @@ Tasks:
   - `to_gtk_css() -> String` for app chrome (`gtk::CssProvider::load_from_data`).
   - `to_sourceview_scheme_xml() -> String` (GtkSourceView style scheme XML).
   - `to_preview_css() -> String` (injected via `webkit6::UserStyleSheet`).
-- Bundle `resources/themes/event-horizon.json` via `include_str!`.
+- Bundle `resources/themes/retro82.json` (default) and `event-horizon.json` via
+  `include_str!`. Each file carries a dark and a light palette; default is retro82 dark.
 
 Acceptance:
-- `insta` snapshot tests for all three generator outputs against event-horizon.
+- `insta` snapshot tests for all three generator outputs against retro82 and
+  event-horizon (dark plus the light path).
 - Unit tests: missing required palette key -> specific error; bad `$ref` -> specific
   error; unknown top-level field -> ignored, no error.
 

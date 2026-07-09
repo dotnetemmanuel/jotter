@@ -19,7 +19,7 @@ apps/
   jotter/    binary crate, wires everything, GTK Application (stays thin)
 resources/
   ui/        .ui files (GTK Builder XML)
-  themes/    bundled theme JSONC (event-horizon, catppuccin-mocha, solarized-light)
+  themes/    bundled theme JSONC (retro82 default, event-horizon), each with a dark and light palette
   icons/     SVG icons (jotter.svg lives here)
 ```
 
@@ -125,8 +125,13 @@ Generators:
 
 Theme sources: bundled `resources/themes/*.json` via `include_str!`; user
 `~/.config/jotter/themes/*.json`. A user theme with the same `id` overrides the
-bundle. Ship event-horizon (default), catppuccin-mocha, solarized-light (proves the
-light path). Format is JSONC (comments allowed); strip comments before serde.
+bundle. Ship retro82 (default, dark mode) and event-horizon. Each file carries a
+dark and a light palette plus shared structural sections whose colors are
+`$token` references, so one file resolves to a full light or dark theme for the
+selected mode. A valid theme file (parses and every `$ref` resolves) appears in
+the settings dropdown. Format is JSONC (comments allowed); strip comments before
+serde. The chrome is neo-brutalist: thick borders, hard offset shadows, rounded
+corners.
 
 ## Config resolution
 
