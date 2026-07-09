@@ -1,0 +1,6 @@
+[package]
+name = "jotter-index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

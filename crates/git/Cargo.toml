@@ -1,0 +1,6 @@
+[package]
+name = "jotter-git"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

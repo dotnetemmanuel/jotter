@@ -1,0 +1,6 @@
+[package]
+name = "jotter-preview"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

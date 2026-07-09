@@ -1,0 +1,6 @@
+[package]
+name = "jotter-theming"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

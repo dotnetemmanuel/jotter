@@ -1,0 +1,6 @@
+[package]
+name = "jotter-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
