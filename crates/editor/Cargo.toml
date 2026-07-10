@@ -4,3 +4,6 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+gtk = { version = "0.11.4", package = "gtk4", features = ["v4_12"] }
+jotter-theming = { version = "0.1.0", path = "../theming" }
+sourceview5 = "0.11.1"

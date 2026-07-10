@@ -1,0 +1,45 @@
+---
+source: crates/parser/tests/snapshot.rs
+expression: html
+---
+<h1><a href="#sample-note" aria-hidden="true" class="anchor" id="sample-note"></a>Sample Note</h1>
+<p>Intro paragraph with <code>inline code</code> and <del>struck text</del>.</p>
+<h2><a href="#details" aria-hidden="true" class="anchor" id="details"></a>Details</h2>
+<p>A short table:</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>one</td>
+<td>1</td>
+</tr>
+<tr>
+<td>two</td>
+<td>2</td>
+</tr>
+</tbody>
+</table>
+<h2><a href="#details-1" aria-hidden="true" class="anchor" id="details-1"></a>Details</h2>
+<p>A task list:</p>
+<ul>
+<li><input type="checkbox" checked="" disabled="" /> parse frontmatter</li>
+<li><input type="checkbox" disabled="" /> highlight code</li>
+</ul>
+<p>Here is a footnote reference.<sup class="footnote-ref"><a href="#fn-note" id="fnref-note" data-footnote-ref>1</a></sup></p>
+<pre><code class="language-rust">fn main() {
+    let greeting = &quot;hello&quot;;
+    println!(&quot;{greeting}&quot;);
+}
+</code></pre>
+<section class="footnotes" data-footnotes>
+<ol>
+<li id="fn-note">
+<p>The footnote body. <a href="#fnref-note" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1" aria-label="Back to reference 1">↩</a></p>
+</li>
+</ol>
+</section>

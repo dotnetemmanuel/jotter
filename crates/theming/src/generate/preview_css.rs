@@ -29,11 +29,16 @@ pre {{\n  background: {code_bg};\n  padding: 1rem;\n  border-radius: 10px;\n  ov
 pre code {{\n  background: transparent;\n  padding: 0;\n}}\n\n\
 blockquote {{\n  margin: 1rem 0;\n  padding: 0.25rem 1rem;\n  border-left: 4px solid {quote_border};\n  color: {muted};\n}}\n\n\
 hr {{\n  border: none;\n  border-top: 2px solid {rule};\n}}\n\n\
-table {{\n  border-collapse: collapse;\n}}\n\n\
-th, td {{\n  border: 1px solid {table_border};\n  padding: 0.4rem 0.6rem;\n}}\n\n\
+table {{\n  border-collapse: collapse;\n  margin: 1rem 0;\n  border: 1px solid {table_border};\n}}\n\n\
+th, td {{\n  border: 1px solid {table_border};\n  padding: 0.75rem 1.25rem;\n  text-align: left;\n}}\n\n\
+th {{\n  background: {code_bg};\n}}\n\n\
+li:has(> input[type=\"checkbox\"]) {{\n  list-style: none;\n}}\n\n\
+input[type=\"checkbox\"] {{\n  appearance: none;\n  -webkit-appearance: none;\n  width: 1.15em;\n  height: 1.15em;\n  margin-right: 0.5em;\n  vertical-align: -0.25em;\n  border: 2px solid {table_border};\n  border-radius: 5px;\n  background-color: {code_bg};\n  background-repeat: no-repeat;\n  background-position: center;\n  background-size: 0.95em;\n}}\n\n\
+input[type=\"checkbox\"]:checked {{\n  background-color: {link};\n  border-color: {link};\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23{bg_hex}' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' d='M4 8.5l3 3 5-6'/%3E%3C/svg%3E\");\n}}\n\n\
 img {{\n  max-width: 100%;\n}}\n",
             name = self.scheme_name(),
             bg = p.background,
+            bg_hex = p.background.trim_start_matches('#'),
             fg = p.foreground,
             heading = p.heading,
             link = p.link,

@@ -4,3 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+comrak = "0.53.0"
+jotter-theming = { version = "0.1.0", path = "../theming" }
+syntect = "5.3.0"
+
+[dev-dependencies]
+insta = "1.48.0"

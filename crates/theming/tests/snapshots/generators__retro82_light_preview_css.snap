@@ -10,7 +10,7 @@ body {
   padding: 2rem;
   background: #f6e8cd;
   color: #0a2138;
-  font-family: serif;
+  font-family: Inter, sans-serif;
   font-size: 15px;
   line-height: 1.6;
 }
@@ -62,11 +62,43 @@ hr {
 
 table {
   border-collapse: collapse;
+  margin: 1rem 0;
+  border: 1px solid #d8c49a;
 }
 
 th, td {
   border: 1px solid #d8c49a;
-  padding: 0.4rem 0.6rem;
+  padding: 0.75rem 1.25rem;
+  text-align: left;
+}
+
+th {
+  background: #e6d2a2;
+}
+
+li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.15em;
+  height: 1.15em;
+  margin-right: 0.5em;
+  vertical-align: -0.25em;
+  border: 2px solid #d8c49a;
+  border-radius: 5px;
+  background-color: #e6d2a2;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 0.95em;
+}
+
+input[type="checkbox"]:checked {
+  background-color: #0d6e78;
+  border-color: #0d6e78;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23f6e8cd' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' d='M4 8.5l3 3 5-6'/%3E%3C/svg%3E");
 }
 
 img {

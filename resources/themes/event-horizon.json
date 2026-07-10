@@ -104,7 +104,7 @@
   "typography": {
     "ui_font": "Inter, sans-serif",
     "editor_font": "monospace",
-    "preview_font": "serif",
+    "preview_font": "Inter, sans-serif",
     "mono_font": "monospace",
     "font_size": 15,
     "line_height": 1.6
