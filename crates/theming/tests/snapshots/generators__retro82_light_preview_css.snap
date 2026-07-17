@@ -1,5 +1,6 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 39
 expression: "resolve(\"retro82\", Mode::Light).to_preview_css()"
 ---
 /* retro82 light */
@@ -61,19 +62,46 @@ hr {
 }
 
 table {
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   margin: 1rem 0;
   border: 1px solid #d8c49a;
+  border-radius: 10px;
 }
 
 th, td {
-  border: 1px solid #d8c49a;
-  padding: 0.75rem 1.25rem;
+  border-right: 1px solid #d8c49a;
+  border-bottom: 1px solid #d8c49a;
+  padding: 0.5rem 0.9rem;
   text-align: left;
+}
+
+th:last-child, td:last-child {
+  border-right: none;
+}
+
+tr:last-child td {
+  border-bottom: none;
 }
 
 th {
   background: #e6d2a2;
+}
+
+th:first-child {
+  border-top-left-radius: 10px;
+}
+
+th:last-child {
+  border-top-right-radius: 10px;
+}
+
+tr:last-child td:first-child {
+  border-bottom-left-radius: 10px;
+}
+
+tr:last-child td:last-child {
+  border-bottom-right-radius: 10px;
 }
 
 li:has(> input[type="checkbox"]) {

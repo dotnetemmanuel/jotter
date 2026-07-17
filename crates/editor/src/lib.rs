@@ -74,8 +74,18 @@ impl Editor {
         self.buffer.text(&start, &end, true).to_string()
     }
 
-    /// Replace the buffer text. Wrapped in `begin_user_action`/`end_user_action`
-    /// so the undo history stays coherent (see the `SourceView` pitfall).
+    /// Load the initial document. Bracketed as an irreversible action so it stays
+    /// out of the undo history and does not collide with `GtkSourceView`s own
+    /// irreversible bracketing of the first content load (a user action there
+    /// triggers the "cannot begin irreversible action while in user action" warning).
+    pub fn set_initial_text(&self, text: &str) {
+        self.buffer.begin_irreversible_action();
+        self.buffer.set_text(text);
+        self.buffer.end_irreversible_action();
+    }
+
+    /// Replace the buffer text for later programmatic edits. Wrapped in
+    /// `begin_user_action`/`end_user_action` so the undo history stays coherent.
     pub fn set_text(&self, text: &str) {
         self.buffer.begin_user_action();
         self.buffer.set_text(text);
@@ -97,6 +107,13 @@ impl Editor {
         if let Some(iter) = self.buffer.iter_at_line(target) {
             self.buffer.place_cursor(&iter);
         }
+    }
+
+    /// Re-apply a theme (for example after a light/dark switch): re-register and
+    /// set the style scheme on the buffer. The font is mode-independent, so it is
+    /// left as applied at construction to avoid stacking display providers.
+    pub fn set_theme(&self, theme: &Theme) {
+        register_and_apply_scheme(&self.buffer, theme);
     }
 
     /// Give keyboard focus to the editor view.

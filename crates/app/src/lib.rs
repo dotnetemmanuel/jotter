@@ -13,10 +13,10 @@ use gtk::{
 
 use jotter_editor::Editor;
 use jotter_preview::Preview;
-use jotter_theming::Theme;
+use jotter_theming::{Mode, Theme, ThemeFile};
 
 /// Reverse-DNS application id, stable for GTK settings and Wayland app matching.
-const APP_ID: &str = "se.mindfulstack.jotter";
+const APP_ID: &str = "dev.jotter.Jotter";
 
 /// Stack page name for the editor.
 const PAGE_EDIT: &str = "edit";
@@ -34,7 +34,12 @@ struct State {
     editor: Editor,
     preview: Preview,
     stack: Stack,
-    theme: Theme,
+    /// Active resolved theme; swapped in place on a light/dark toggle.
+    theme: RefCell<Theme>,
+    /// Parsed theme source, re-resolved for the other mode on toggle.
+    theme_file: ThemeFile,
+    /// Display-level chrome CSS provider, restyled in place on toggle.
+    chrome_provider: CssProvider,
     /// Caret line (0-based) cached when leaving the editor, restored on return.
     cached_caret: RefCell<i32>,
     /// Pending debounced re-render, removed and replaced on each buffer change.
@@ -51,45 +56,45 @@ pub fn run() -> gtk::glib::ExitCode {
     // First positional arg after the program name, if any, is a markdown path.
     let file_arg: Rc<Option<String>> = Rc::new(std::env::args().nth(1));
 
-    app.connect_startup(|_| apply_theme_css());
     app.connect_activate(move |app| build_ui(app, file_arg.as_ref().as_deref()));
 
     // GTK owns args itself; passing an empty slice avoids double-parsing our path.
     app.run_with_args::<&str>(&[])
 }
 
-/// Resolve the bundled default theme and apply its chrome CSS to the display.
-///
-/// A resolve failure is logged to stderr and skipped so the window still opens.
-fn apply_theme_css() {
-    let theme = match jotter_theming::bundled::default_theme() {
-        Ok(theme) => theme,
-        Err(err) => {
-            eprintln!("jotter: could not resolve default theme: {err}");
-            return;
-        }
-    };
-    let provider = CssProvider::new();
+/// Apply a theme's chrome CSS to the display through `provider`, creating the
+/// display association the first time and restyling in place on later calls.
+fn apply_chrome_css(provider: &CssProvider, theme: &Theme) {
     provider.load_from_string(&theme.to_gtk_css());
-
-    if let Some(display) = gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
 }
 
 /// Build the main window: editor and preview in a stack, with the toggle wired.
 fn build_ui(app: &Application, file_arg: Option<&str>) {
-    let theme = match jotter_theming::bundled::default_theme() {
+    let theme_file = match jotter_theming::bundled::default_theme_file() {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("jotter: could not load default theme: {err}");
+            return;
+        }
+    };
+    let theme = match theme_file.resolve(jotter_theming::bundled::DEFAULT_MODE) {
         Ok(theme) => theme,
         Err(err) => {
             eprintln!("jotter: could not resolve default theme: {err}");
             return;
         }
     };
+
+    // Chrome CSS lives on a display-level provider we keep so a toggle restyles it.
+    let chrome_provider = CssProvider::new();
+    apply_chrome_css(&chrome_provider, &theme);
+    if let Some(display) = gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &chrome_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
 
     let editor = Editor::new(&theme);
     let preview = Preview::new(&theme);
@@ -112,18 +117,21 @@ fn build_ui(app: &Application, file_arg: Option<&str>) {
         },
         None => SAMPLE_MARKDOWN.to_owned(),
     };
-    editor.set_text(&initial);
+    editor.set_initial_text(&initial);
 
     let state = Rc::new(State {
         editor,
         preview,
         stack: stack.clone(),
-        theme,
+        theme: RefCell::new(theme),
+        theme_file,
+        chrome_provider,
         cached_caret: RefCell::new(0),
         pending: RefCell::new(None),
     });
 
     wire_toggle(app, &state);
+    wire_theme_toggle(app, &state);
     wire_debounce(&state);
 
     let header = HeaderBar::new();
@@ -136,9 +144,40 @@ fn build_ui(app: &Application, file_arg: Option<&str>) {
         .child(&stack)
         .build();
     window.set_titlebar(Some(&header));
+    wire_preview_zoom(&window, &state);
     window.present();
 
     state.editor.grab_focus();
+}
+
+/// Match the `WebKit` preview zoom to the monitor scale so its text stays crisp
+/// under Wayland fractional scaling instead of being upscaled from a 1x render.
+fn wire_preview_zoom(window: &ApplicationWindow, state: &Rc<State>) {
+    let zoom_state = Rc::clone(state);
+    let apply = move |window: &ApplicationWindow| {
+        // The surface carries the true fractional scale; fall back to the integer scale factor.
+        let scale = window
+            .surface()
+            .map_or_else(|| f64::from(window.scale_factor()), |s| s.scale());
+        if scale > 0.0 {
+            zoom_state.preview.set_zoom(scale);
+        }
+    };
+
+    // The surface (and its fractional scale) only exists once the window is realized.
+    let on_realize = apply.clone();
+    window.connect_realize(move |window| {
+        on_realize(window);
+        // Track later fractional-scale changes on the same monitor.
+        if let Some(surface) = window.surface() {
+            let on_scale = on_realize.clone();
+            let window = window.clone();
+            surface.connect_scale_notify(move |_| on_scale(&window));
+        }
+    });
+
+    // Track moves to a monitor with a different integer scale factor.
+    window.connect_scale_factor_notify(move |window| apply(window));
 }
 
 /// Install a Ctrl+E accelerator that toggles the stack between edit and preview.
@@ -167,19 +206,54 @@ fn toggle_mode(state: &Rc<State>) {
     }
 }
 
+/// Install a Ctrl+T accelerator that switches the active theme between light and dark.
+fn wire_theme_toggle(app: &Application, state: &Rc<State>) {
+    let action = gtk::gio::SimpleAction::new("toggle-theme", None);
+    let theme_state = Rc::clone(state);
+    action.connect_activate(move |_, _| toggle_theme_mode(&theme_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.toggle-theme", &["<Primary>t"]);
+}
+
+/// Re-resolve the theme for the opposite mode and re-apply it live to the chrome,
+/// editor scheme, and preview CSS. On a resolve failure the current theme stays.
+fn toggle_theme_mode(state: &Rc<State>) {
+    let next_mode = match state.theme.borrow().mode {
+        Mode::Dark => Mode::Light,
+        Mode::Light => Mode::Dark,
+    };
+    let next = match state.theme_file.resolve(next_mode) {
+        Ok(theme) => theme,
+        Err(err) => {
+            eprintln!("jotter: could not switch theme mode: {err}");
+            return;
+        }
+    };
+
+    apply_chrome_css(&state.chrome_provider, &next);
+    state.editor.set_theme(&next);
+    state.preview.set_theme(&next);
+    *state.theme.borrow_mut() = next;
+
+    // The loaded preview page keeps the old CSS and code colors, so re-render it if
+    // it is showing. Preserve scroll so the recolor does not jump the reader.
+    if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+        let text = state.editor.text();
+        let rendered = jotter_parser::render(&text, &state.theme.borrow().code);
+        state.preview.rerender_preserving_scroll(&rendered.html);
+    }
+}
+
 /// Parse the editor buffer, load it into the preview, and scroll to the heading
 /// nearest the cached caret line.
 fn render_into_preview(state: &Rc<State>) {
     let text = state.editor.text();
-    let rendered = jotter_parser::render(&text, &state.theme.code);
-    state.preview.render(&rendered.html);
+    let rendered = jotter_parser::render(&text, &state.theme.borrow().code);
 
     // Caret is 0-based, heading source lines are 1-based, so compare in 1-based.
     let caret_1based = *state.cached_caret.borrow() + 1;
     let anchor = nearest_heading(&rendered.headings, caret_1based);
-    if let Some(anchor) = anchor {
-        state.preview.scroll_to_anchor(anchor);
-    }
+    state.preview.render(&rendered.html, anchor);
 }
 
 /// Pick the anchor for the heading nearest at or above `caret_1based`.

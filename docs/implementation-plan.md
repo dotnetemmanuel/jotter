@@ -8,6 +8,25 @@ This document is the execution guide. Work top to bottom. Do not start a phase
 until the previous phase meets its acceptance criteria. Ship phases 0 through 5
 before touching any v1.5 feature.
 
+## Status (2026-07-17)
+
+Phases 0 and 1 are complete. Phase 1 shipped the theming crate, the instant
+edit-preview toggle, and a polish pass:
+
+- Preview theme CSS is embedded as an author `<style>` per render, not a
+  `webkit6::UserStyleSheet` (that dropped table cell padding or the body
+  background depending on the injection level).
+- Scroll-to-heading on toggle is reliable: the fresh file loads first, then the
+  `#anchor` navigation runs on the load-finished signal as a same-document scroll.
+- Table cell padding with rounded outer corners (separate borders, rounded corner
+  cells, no clip).
+- `Ctrl+T` switches the active theme between light and dark, recoloring the
+  preview in place via `reload_bypass_cache` so the scroll position is preserved.
+- App id is `dev.jotter.Jotter`.
+
+Next: Phase 2 (vault): open a folder as a vault, file tree, notify watcher, and
+the SQLite index scaffolding.
+
 ## Identity and paths
 
 - App name / binary / crate: `jotter`
@@ -58,7 +77,7 @@ Tasks:
 3. `apps/jotter/src/main.rs`: build a `gtk::Application`, connect `activate`,
    create `ApplicationWindow` titled "jotter", default size 1400x900, present it.
    Add a `HeaderBar` and a placeholder body label.
-4. Set the app id to `se.mindfulstack.jotter` (reverse-DNS, stable for GTK).
+4. Set the app id to `dev.jotter.Jotter` (reverse-DNS, stable for GTK).
 
 Acceptance:
 - `cargo build --workspace` clean, no warnings.
@@ -87,7 +106,7 @@ Tasks:
 - Three generators, each a pure function of the parsed theme:
   - `to_gtk_css() -> String` for app chrome (`gtk::CssProvider::load_from_data`).
   - `to_sourceview_scheme_xml() -> String` (GtkSourceView style scheme XML).
-  - `to_preview_css() -> String` (injected via `webkit6::UserStyleSheet`).
+  - `to_preview_css() -> String` (embedded as an author `<style>` per render).
 - Bundle `resources/themes/retro82.json` (default) and `event-horizon.json` via
   `include_str!`. Each file carries a dark and a light palette; default is retro82 dark.
 
@@ -104,8 +123,9 @@ Tasks:
   spec. Register the generated style scheme with `StyleSchemeManager`. Enable
   current-line highlight, right-margin guide, bracket matching. Line numbers off
   by default (config-gated later).
-- `crates/preview`: wrap `webkit6::WebView`. JavaScript disabled by default. Inject
-  the preview CSS as a `UserStyleSheet`. Expose `render(html: &str)`.
+- `crates/preview`: wrap `webkit6::WebView`. JavaScript disabled by default. Embed
+  the preview CSS as an author `<style>` in each rendered document. Expose
+  `render(html, anchor)`.
 - `crates/parser`: `markdown_to_html(src) -> String` using comrak with GFM
   extensions (tables, strikethrough, tasklists, autolinks, footnotes). Strip
   frontmatter before parsing. Wire syntect for fenced code blocks (bundled theme
@@ -261,7 +281,8 @@ Same fallback for partial clone, sparse checkout, and awkward rebases.
 
 Ctrl+O quick switcher, Ctrl+P command palette, Ctrl+Shift+F full-text search,
 Ctrl+N new note (current folder), Ctrl+Shift+N new note (root), Ctrl+S save,
-Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+/ toggle line comment,
+Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
+Ctrl+/ toggle line comment,
 Ctrl+K insert link, Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
 F2 rename, Ctrl+G S stage all, Ctrl+G C commit, Ctrl+G P push, Ctrl+G F pull.
 

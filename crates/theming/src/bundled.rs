@@ -38,6 +38,15 @@ pub const DEFAULT_MODE: Mode = Mode::Dark;
 /// Returns a [`ThemeError`] if the bundled default theme fails to parse or
 /// resolve, which would be a build-time regression in the shipped JSON.
 pub fn default_theme() -> Result<Theme, ThemeError> {
-    let file = ThemeFile::from_jsonc(BUNDLED[0].source)?;
-    file.resolve(DEFAULT_MODE)
+    default_theme_file()?.resolve(DEFAULT_MODE)
+}
+
+/// Parse the bundled default theme file (retro82) without resolving a mode, so
+/// the caller can re-resolve the other mode on a light/dark switch.
+///
+/// # Errors
+/// Returns a [`ThemeError`] if the bundled default theme fails to parse, which
+/// would be a build-time regression in the shipped JSON.
+pub fn default_theme_file() -> Result<ThemeFile, ThemeError> {
+    ThemeFile::from_jsonc(BUNDLED[0].source)
 }
