@@ -1,14 +1,17 @@
 #![warn(clippy::pedantic)]
 //! jotter preview: a `WebKit` web view that renders parsed markdown HTML with the
-//! active theme CSS embedded as an author `<style>` in each document. Page
-//! JavaScript is off. The `<style>` route cascades predictably where injected
-//! `UserStyleSheet`s did not (they dropped cell padding or the body background).
+//! active theme CSS embedded as an author `<style>` in each document. JavaScript
+//! in the document markup is off (embedded `<script>` and inline handlers are
+//! stripped), but host-initiated JavaScript is on so we can drive scrolling. The
+//! `<style>` route cascades predictably where injected `UserStyleSheet`s did not
+//! (they dropped cell padding or the body background).
 //!
-//! To scroll to a heading anchor with JavaScript disabled, the rendered document
-//! is written to a temp file and loaded by `file://` uri; once that load finishes
-//! the same uri is re-loaded with a `#anchor` fragment, which `WebKit` treats as
-//! a same-document scroll. Scrolling only after the fresh load has committed is
-//! what makes it reliable.
+//! To scroll to a heading anchor, the rendered document is written to a temp file
+//! and loaded by `file://` uri; once that load finishes we run a small host script
+//! that calls `scrollIntoView` on the anchor element. Scrolling via script rather
+//! than a `#anchor` fragment keeps the current uri fragment-free, so a later
+//! `reload_bypass_cache` (used by the in-place theme recolor) truly preserves the
+//! reader scroll instead of snapping back to the fragment.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -34,12 +37,14 @@ pub struct Preview {
 }
 
 impl Preview {
-    /// Build the preview. Page JavaScript is disabled. The theme preview CSS is
-    /// embedded as an author `<style>` in each rendered document.
+    /// Build the preview. JavaScript in the document markup is disabled (embedded
+    /// scripts are stripped) while host-initiated JavaScript stays on so we can
+    /// scroll the page. The theme preview CSS is embedded as an author `<style>`
+    /// in each rendered document.
     #[must_use]
     pub fn new(theme: &jotter_theming::Theme) -> Self {
         let settings = Settings::new();
-        settings.set_enable_javascript(false);
+        settings.set_enable_javascript(true);
         settings.set_enable_javascript_markup(false);
 
         let view = WebView::builder().settings(&settings).build();
@@ -47,21 +52,23 @@ impl Preview {
         let base_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         let pending_anchor: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-        // Scroll to the heading anchor only once the fresh page finishes loading:
-        // a fragment navigation on an already-loaded document is a reliable
-        // same-document scroll, unlike a fragment baked into the fresh load.
+        // Scroll to the heading anchor once the fresh page finishes loading, using
+        // a host script so the current uri stays fragment-free (a fragment baked
+        // into the current uri would re-snap on the theme recolor reload).
         {
-            let base_path = Rc::clone(&base_path);
             let pending_anchor = Rc::clone(&pending_anchor);
             view.connect_load_changed(move |view, event| {
                 if event != LoadEvent::Finished {
                     return;
                 }
-                let anchor = pending_anchor.borrow_mut().take();
-                if let Some(anchor) = anchor
-                    && let Some(path) = base_path.borrow().as_ref()
-                {
-                    view.load_uri(&format!("{}#{anchor}", file_uri(path)));
+                if let Some(anchor) = pending_anchor.borrow_mut().take() {
+                    view.evaluate_javascript(
+                        &scroll_to_anchor_js(&anchor),
+                        None,
+                        None,
+                        None::<&gtk::gio::Cancellable>,
+                        |_| {},
+                    );
                 }
             });
         }
@@ -170,9 +177,42 @@ fn file_uri(path: &std::path::Path) -> String {
     format!("file://{}", path.display())
 }
 
+/// Host script that scrolls the anchor element to the top of the viewport, or
+/// does nothing when no element has that id. The `true` argument aligns the
+/// element to the top, matching the old `#anchor` fragment behaviour.
+fn scroll_to_anchor_js(anchor: &str) -> String {
+    format!(
+        "(function(){{var e=document.getElementById({});if(e)e.scrollIntoView(true);}})();",
+        js_string_literal(anchor)
+    )
+}
+
+/// Encode `s` as a double-quoted JavaScript string literal, escaping the few
+/// characters that could otherwise break out of the literal (a heading slug is
+/// unlikely to contain them, but the injection must be safe regardless).
+fn js_string_literal(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{file_uri, preview_file_name, wrap_document};
+    use super::{file_uri, js_string_literal, preview_file_name, scroll_to_anchor_js, wrap_document};
     use std::path::Path;
 
     #[test]
@@ -196,5 +236,18 @@ mod tests {
     fn preview_file_name_is_unique_per_counter() {
         assert_eq!(preview_file_name(0), "preview-0.html");
         assert_ne!(preview_file_name(1), preview_file_name(2));
+    }
+
+    #[test]
+    fn scroll_script_targets_the_anchor_id() {
+        let js = scroll_to_anchor_js("my-heading");
+        assert!(js.contains("getElementById(\"my-heading\")"));
+        assert!(js.contains("scrollIntoView(true)"));
+    }
+
+    #[test]
+    fn js_string_literal_escapes_quotes_and_backslashes() {
+        assert_eq!(js_string_literal("a\"b\\c"), "\"a\\\"b\\\\c\"");
+        assert_eq!(js_string_literal("plain"), "\"plain\"");
     }
 }

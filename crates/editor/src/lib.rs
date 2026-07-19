@@ -82,6 +82,9 @@ impl Editor {
         self.buffer.begin_irreversible_action();
         self.buffer.set_text(text);
         self.buffer.end_irreversible_action();
+        // set_text leaves the caret at the end; move it to the top so the first
+        // edit -> preview toggle anchors at the document top rather than the last heading.
+        self.buffer.place_cursor(&self.buffer.start_iter());
     }
 
     /// Replace the buffer text for later programmatic edits. Wrapped in

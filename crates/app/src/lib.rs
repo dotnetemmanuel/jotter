@@ -258,8 +258,9 @@ fn render_into_preview(state: &Rc<State>) {
 
 /// Pick the anchor for the heading nearest at or above `caret_1based`.
 ///
-/// Returns the greatest `source_line <= caret_1based`, else the first heading,
-/// else `None` when there are no headings.
+/// Returns the greatest `source_line <= caret_1based`, else `None` so the preview
+/// stays at the top of the document (the caret sits above the first heading, or
+/// there are no headings at all).
 fn nearest_heading(headings: &[jotter_parser::HeadingAnchor], caret_1based: i32) -> Option<&str> {
     let caret = usize::try_from(caret_1based.max(1)).unwrap_or(1);
     let mut chosen: Option<&jotter_parser::HeadingAnchor> = None;
@@ -268,9 +269,7 @@ fn nearest_heading(headings: &[jotter_parser::HeadingAnchor], caret_1based: i32)
             chosen = Some(heading);
         }
     }
-    chosen
-        .or_else(|| headings.first())
-        .map(|h| h.anchor.as_str())
+    chosen.map(|h| h.anchor.as_str())
 }
 
 /// Re-render the preview 150 ms after a buffer change, but only while the preview
