@@ -23,69 +23,118 @@ headerbar {
   border-right: 2px solid #fadad1;
 }
 
+.sidebar listview {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.sidebar listview > row {
+  border-radius: 3px;
+  padding: 3px 8px;
+  margin: 1px 6px;
+}
+
+.sidebar listview > row:hover {
+  background-color: #2e303e;
+}
+
+.sidebar listview > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.sidebar listview > row:selected:hover {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
 button {
   background-color: #232530;
   background-image: none;
   color: #fadad1;
   border: 2px solid #fadad1;
-  border-radius: 10px;
-  box-shadow: 4px 4px 0 #fadad1;
-  padding: 4px 10px;
+  border-radius: 3px;
+  box-shadow: none;
+  padding: 6px 14px;
 }
 
 button:hover {
   background-color: #2e303e;
 }
 
-button:active {
-  box-shadow: 0 0 0 #fadad1;
-}
-
 button.suggested-action {
-  background-color: #ee64ac;
+  background-color: #fadad1;
   background-image: none;
   color: #1c1e26;
+  border-color: #fadad1;
 }
 
 button.suggested-action:hover {
   background-color: #ee64ac;
+  border-color: #ee64ac;
+  color: #1c1e26;
 }
 
 button.destructive-action {
   background-color: #e95678;
   background-image: none;
   color: #1c1e26;
+  border-color: #e95678;
 }
 
 button.destructive-action:hover {
   background-color: #e95678;
 }
 
-entry {
-  background-color: #1c1e26;
+windowcontrols button, windowcontrols button.titlebutton {
+  background-color: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: #fadad1;
+}
+
+windowcontrols button:hover, windowcontrols button.titlebutton:hover {
+  background-color: #2e303e;
   background-image: none;
   color: #fadad1;
-  border: 2px solid #fadad1;
-  border-radius: 10px;
-  padding: 4px 8px;
+  border-radius: 3px;
+}
+
+windowcontrols button image, windowcontrols button:hover image {
+  background: none;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: #fadad1;
+}
+
+entry {
+  background-color: transparent;
+  background-image: none;
+  color: #fadad1;
+  border: none;
+  border-bottom: 2px solid #fadad1;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 6px 2px;
 }
 
 entry:focus-within {
-  border-color: #26bbd9;
-  box-shadow: 4px 4px 0 #26bbd9;
+  border-bottom-color: #ee64ac;
 }
 
 popover > contents {
-  background-color: #2e303e;
+  background-color: #232530;
   color: #fadad1;
   border: 2px solid #fadad1;
-  border-radius: 10px;
-  box-shadow: 4px 4px 0 #fadad1;
+  border-radius: 3px;
+  box-shadow: none;
 }
 
 tooltip {
-  background-color: #2e303e;
+  background-color: #232530;
   color: #fadad1;
   border: 2px solid #fadad1;
-  border-radius: 10px;
+  border-radius: 3px;
 }

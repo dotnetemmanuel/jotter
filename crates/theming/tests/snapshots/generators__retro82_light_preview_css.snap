@@ -1,6 +1,5 @@
 ---
 source: crates/theming/tests/generators.rs
-assertion_line: 39
 expression: "resolve(\"retro82\", Mode::Light).to_preview_css()"
 ---
 /* retro82 light */
@@ -8,7 +7,7 @@ expression: "resolve(\"retro82\", Mode::Light).to_preview_css()"
 
 body {
   margin: 0;
-  padding: 2rem;
+  padding: 2.5rem 2.75rem;
   background: #f6e8cd;
   color: #0a2138;
   font-family: Inter, sans-serif;
@@ -18,11 +17,33 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   color: #0a2138;
-  line-height: 1.25;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  margin: 1.6em 0 0.5em;
+}
+
+h1 {
+  font-size: 2.4em;
+  margin-top: 0.2em;
+}
+
+h2 {
+  font-size: 1.7em;
+}
+
+h3 {
+  font-size: 1.32em;
+}
+
+h4 {
+  font-size: 1.12em;
 }
 
 a {
   color: #0d6e78;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
 }
 
 a.broken-link {
@@ -34,13 +55,14 @@ code {
   font-family: monospace;
   background: #e6d2a2;
   padding: 0.15em 0.35em;
-  border-radius: 6px;
+  border-radius: 3px;
 }
 
 pre {
   background: #e6d2a2;
   padding: 1rem;
-  border-radius: 10px;
+  border: 2px solid #d8c49a;
+  border-radius: 3px;
   overflow: auto;
 }
 
@@ -59,14 +81,15 @@ blockquote {
 hr {
   border: none;
   border-top: 2px solid #d8c49a;
+  margin: 2rem 0;
 }
 
 table {
   border-collapse: separate;
   border-spacing: 0;
   margin: 1rem 0;
-  border: 1px solid #d8c49a;
-  border-radius: 10px;
+  border: 2px solid #d8c49a;
+  border-radius: 3px;
 }
 
 th, td {
@@ -89,19 +112,19 @@ th {
 }
 
 th:first-child {
-  border-top-left-radius: 10px;
+  border-top-left-radius: 3px;
 }
 
 th:last-child {
-  border-top-right-radius: 10px;
+  border-top-right-radius: 3px;
 }
 
 tr:last-child td:first-child {
-  border-bottom-left-radius: 10px;
+  border-bottom-left-radius: 3px;
 }
 
 tr:last-child td:last-child {
-  border-bottom-right-radius: 10px;
+  border-bottom-right-radius: 3px;
 }
 
 li:has(> input[type="checkbox"]) {
@@ -116,7 +139,7 @@ input[type="checkbox"] {
   margin-right: 0.5em;
   vertical-align: -0.25em;
   border: 2px solid #d8c49a;
-  border-radius: 5px;
+  border-radius: 3px;
   background-color: #e6d2a2;
   background-repeat: no-repeat;
   background-position: center;

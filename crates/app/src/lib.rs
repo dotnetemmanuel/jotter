@@ -188,6 +188,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .width_request(240)
         .hscrollbar_policy(gtk::PolicyType::Automatic)
         .build();
+    // The theme stylesheet targets `.sidebar` for the surface color and tree rows.
+    sidebar.add_css_class("sidebar");
 
     let status = Label::builder()
         .halign(gtk::Align::Start)
@@ -692,6 +694,13 @@ fn toggle_theme_mode(state: &Rc<State>) {
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
     *state.theme.borrow_mut() = next;
+
+    // Swapping the provider CSS does not always invalidate the sidebar
+    // ScrolledWindow background, so it can keep the old mode color until the next
+    // unrelated redraw. Force a full repaint so every chrome surface recolors now.
+    if let Some(root) = state.sidebar.root() {
+        root.queue_draw();
+    }
 
     // The loaded preview page keeps the old CSS and code colors, so re-render it if
     // it is showing. Preserve scroll so the recolor does not jump the reader.

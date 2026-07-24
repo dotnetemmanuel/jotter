@@ -50,9 +50,9 @@
     "focus": "$focus",
     "border": "$text",
     "danger": "$danger",
-    "radius": 10,
+    "radius": 3,
     "border_width": 2,
-    "shadow_offset": 4
+    "shadow_offset": 0
   },
 
   "editor": {
