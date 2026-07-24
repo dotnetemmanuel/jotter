@@ -89,6 +89,7 @@ CREATE INDEX idx_tags_tag ON tags(tag);
 CREATE VIRTUAL TABLE notes_fts USING fts5(
   title, body,
   content='',
+  contentless_delete=1,
   tokenize='unicode61 remove_diacritics 2'
 );
 ```

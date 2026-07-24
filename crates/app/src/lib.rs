@@ -1,19 +1,37 @@
 #![warn(clippy::pedantic)]
-//! Glue crate for jotter. Owns the GTK application, the shared UI state, and the
-//! edit-preview toggle loop. The binary stays thin and only calls `run`.
+//! Glue crate for jotter. Owns the GTK application, the shared UI state, the
+//! edit-preview toggle loop, and (in vault mode) the file tree, background index,
+//! and filesystem watcher. The binary stays thin and only calls `run`.
+
+mod config;
+mod title;
+mod tree;
+mod vault_session;
 
 use std::cell::RefCell;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
+use gtk::gio;
 use gtk::glib::SourceId;
 use gtk::prelude::*;
 use gtk::{
-    Application, ApplicationWindow, CssProvider, HeaderBar, Stack, StackTransitionType, gdk,
+    Application, ApplicationWindow, CssProvider, HeaderBar, Label, ListView, Orientation, Paned,
+    ScrolledWindow, SignalListItemFactory, SingleSelection, Stack, StackTransitionType,
+    TreeExpander, TreeListModel, TreeListRow, gdk,
 };
 
 use jotter_editor::Editor;
+use jotter_index::Index;
 use jotter_preview::Preview;
 use jotter_theming::{Mode, Theme, ThemeFile};
+use jotter_vault::{Vault, VaultChange, WatchGuard};
+
+use config::Config;
+use vault_session::IndexProgress;
 
 /// Reverse-DNS application id, stable for GTK settings and Wayland app matching.
 const APP_ID: &str = "dev.jotter.Jotter";
@@ -26,8 +44,27 @@ const PAGE_PREVIEW: &str = "preview";
 /// Re-render debounce for an already-open preview, in milliseconds.
 const DEBOUNCE_MS: u64 = 150;
 
+/// How often the GTK loop drains the watcher receiver and index progress channel.
+const DRAIN_MS: u64 = 200;
+
 /// Fallback document shown when no path is given or a read fails.
 const SAMPLE_MARKDOWN: &str = "# jotter\n\nA native GTK4 markdown vault.\n\n## Toggle\n\nPress Ctrl+E to switch between edit and preview.\n\n## Code\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
+
+/// The active vault: filesystem handle, UI-thread index, and watcher guard.
+///
+/// Grouped so the whole session can be optional (single-file mode has none).
+struct VaultSession {
+    /// Filesystem layer for note IO and enumeration.
+    vault: Vault,
+    /// UI-thread index connection (single-note reindex on watcher events).
+    index: Index,
+    /// Kept alive to keep the watch thread running; dropping it stops watching.
+    _watch: WatchGuard,
+    /// The tree model backing the sidebar `ListView`, rebuilt on structure change.
+    tree_model: RefCell<TreeListModel>,
+    /// Currently loaded note, vault-relative, if any.
+    current: RefCell<Option<PathBuf>>,
+}
 
 /// Shared, single-threaded application state cloned into GTK closures.
 struct State {
@@ -44,6 +81,14 @@ struct State {
     cached_caret: RefCell<i32>,
     /// Pending debounced re-render, removed and replaced on each buffer change.
     pending: RefCell<Option<SourceId>>,
+    /// The left sidebar container, whose visibility `Ctrl+B` toggles.
+    sidebar: ScrolledWindow,
+    /// The bottom status label (indexing progress, note counts).
+    status: Label,
+    /// The active vault session, absent in single-file mode.
+    session: RefCell<Option<VaultSession>>,
+    /// Persisted global config (recent vaults, last-active note per vault).
+    config: RefCell<Config>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -53,13 +98,44 @@ struct State {
 pub fn run() -> gtk::glib::ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
 
-    // First positional arg after the program name, if any, is a markdown path.
-    let file_arg: Rc<Option<String>> = Rc::new(std::env::args().nth(1));
+    // First positional arg after the program name, if any, is a vault or file path.
+    let path_arg: Rc<Option<String>> = Rc::new(std::env::args().nth(1));
 
-    app.connect_activate(move |app| build_ui(app, file_arg.as_ref().as_deref()));
+    app.connect_activate(move |app| build_ui(app, path_arg.as_ref().as_deref()));
 
     // GTK owns args itself; passing an empty slice avoids double-parsing our path.
     app.run_with_args::<&str>(&[])
+}
+
+/// What the app should open, resolved from the CLI arg and saved config.
+enum Startup {
+    /// Open `root` as a vault, restoring `note` (vault-relative) if present.
+    Vault { root: PathBuf, note: Option<PathBuf> },
+    /// Open a single markdown file (no sidebar). `None` means the built-in sample.
+    File(Option<PathBuf>),
+}
+
+/// Resolves the CLI arg plus config into a concrete startup target.
+///
+/// A directory arg opens a vault. A file arg opens that file. No arg reopens the
+/// most-recent vault (with its last-active note) if config has one, else the
+/// built-in sample.
+fn resolve_startup(arg: Option<&str>, config: &Config) -> Startup {
+    if let Some(arg) = arg {
+        let path = PathBuf::from(arg);
+        if path.is_dir() {
+            let note = config.last_active_for(&path);
+            return Startup::Vault { root: path, note };
+        }
+        return Startup::File(Some(path));
+    }
+    if let Some(root) = config.most_recent_vault()
+        && root.is_dir()
+    {
+        let note = config.last_active_for(&root);
+        return Startup::Vault { root, note };
+    }
+    Startup::File(None)
 }
 
 /// Apply a theme's chrome CSS to the display through `provider`, creating the
@@ -68,8 +144,8 @@ fn apply_chrome_css(provider: &CssProvider, theme: &Theme) {
     provider.load_from_string(&theme.to_gtk_css());
 }
 
-/// Build the main window: editor and preview in a stack, with the toggle wired.
-fn build_ui(app: &Application, file_arg: Option<&str>) {
+/// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
+fn build_ui(app: &Application, path_arg: Option<&str>) {
     let theme_file = match jotter_theming::bundled::default_theme_file() {
         Ok(file) => file,
         Err(err) => {
@@ -105,19 +181,24 @@ fn build_ui(app: &Application, file_arg: Option<&str>) {
     stack.add_named(&editor.widget(), Some(PAGE_EDIT));
     stack.add_named(&preview.widget(), Some(PAGE_PREVIEW));
     stack.set_visible_child_name(PAGE_EDIT);
+    stack.set_hexpand(true);
+    stack.set_vexpand(true);
 
-    // Load the initial document: path arg (utf-8) or a built-in sample on any miss.
-    let initial = match file_arg {
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(contents) => contents,
-            Err(err) => {
-                eprintln!("jotter: could not read {path}: {err}");
-                SAMPLE_MARKDOWN.to_owned()
-            }
-        },
-        None => SAMPLE_MARKDOWN.to_owned(),
-    };
-    editor.set_initial_text(&initial);
+    let sidebar = ScrolledWindow::builder()
+        .width_request(240)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .build();
+
+    let status = Label::builder()
+        .halign(gtk::Align::Start)
+        .margin_start(8)
+        .margin_end(8)
+        .margin_top(2)
+        .margin_bottom(2)
+        .build();
+
+    let config = Config::load();
+    let startup = resolve_startup(path_arg, &config);
 
     let state = Rc::new(State {
         editor,
@@ -128,11 +209,37 @@ fn build_ui(app: &Application, file_arg: Option<&str>) {
         chrome_provider,
         cached_caret: RefCell::new(0),
         pending: RefCell::new(None),
+        sidebar: sidebar.clone(),
+        status: status.clone(),
+        session: RefCell::new(None),
+        config: RefCell::new(config),
     });
+
+    // Load content per the resolved startup target, opening a vault if requested.
+    match startup {
+        Startup::Vault { root, note } => open_vault(&state, &root, note.as_deref()),
+        Startup::File(path) => open_single_file(&state, path.as_deref()),
+    }
 
     wire_toggle(app, &state);
     wire_theme_toggle(app, &state);
+    wire_sidebar_toggle(app, &state);
     wire_debounce(&state);
+
+    let paned = Paned::builder()
+        .orientation(Orientation::Horizontal)
+        .start_child(&sidebar)
+        .end_child(&stack)
+        .resize_end_child(true)
+        .shrink_start_child(false)
+        .position(240)
+        .build();
+
+    let root_box = gtk::Box::new(Orientation::Vertical, 0);
+    root_box.append(&paned);
+    root_box.append(&gtk::Separator::new(Orientation::Horizontal));
+    root_box.append(&status);
+    paned.set_vexpand(true);
 
     let header = HeaderBar::new();
 
@@ -141,13 +248,352 @@ fn build_ui(app: &Application, file_arg: Option<&str>) {
         .title("jotter")
         .default_width(1400)
         .default_height(900)
-        .child(&stack)
+        .child(&root_box)
         .build();
     window.set_titlebar(Some(&header));
     wire_preview_zoom(&window, &state);
     window.present();
 
     state.editor.grab_focus();
+}
+
+/// Loads a single markdown file (or the built-in sample) with no vault session.
+fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
+    let initial = match path {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(err) => {
+                eprintln!("jotter: could not read {}: {err}", path.display());
+                SAMPLE_MARKDOWN.to_owned()
+            }
+        },
+        None => SAMPLE_MARKDOWN.to_owned(),
+    };
+    state.editor.set_initial_text(&initial);
+    // Single-file mode has an empty, non-interactive sidebar.
+    state.status.set_text("no vault open");
+}
+
+/// Opens `root` as a vault: builds the tree, records it in recents, starts the
+/// background index and the watcher, and loads the requested (or first) note.
+fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
+    let vault = match Vault::open(root) {
+        Ok(vault) => vault,
+        Err(err) => {
+            eprintln!("jotter: could not open vault {}: {err}", root.display());
+            open_single_file(state, None);
+            return;
+        }
+    };
+    let index = match vault_session::open_index(root) {
+        Ok(index) => index,
+        Err(err) => {
+            eprintln!("jotter: could not open index for {}: {err}", root.display());
+            open_single_file(state, None);
+            return;
+        }
+    };
+
+    // Start the watcher before enumerating so no external change is missed for long.
+    let watch = match jotter_vault::watch(vault.root()) {
+        Ok((rx, guard)) => {
+            drain_watcher(state, rx);
+            guard
+        }
+        Err(err) => {
+            eprintln!("jotter: could not watch {}: {err}", root.display());
+            open_single_file(state, None);
+            return;
+        }
+    };
+
+    let tree_model = build_tree(state, root);
+
+    state.session.replace(Some(VaultSession {
+        vault,
+        index,
+        _watch: watch,
+        tree_model: RefCell::new(tree_model),
+        current: RefCell::new(None),
+    }));
+
+    // Record the vault in recents and persist right away.
+    {
+        let mut config = state.config.borrow_mut();
+        config.push_recent(root);
+        config.save();
+    }
+
+    // Choose the note to open: the requested one, else the first tree note.
+    let to_open = note
+        .map(Path::to_path_buf)
+        .filter(|rel| root.join(rel).is_file())
+        .or_else(|| first_note(state));
+    if let Some(rel) = to_open {
+        load_note(state, &rel);
+    } else {
+        state.editor.set_initial_text(SAMPLE_MARKDOWN);
+    }
+
+    start_indexing(state, root);
+}
+
+/// The first `.md` note in the vault (path order), for a default open target.
+fn first_note(state: &Rc<State>) -> Option<PathBuf> {
+    let session = state.session.borrow();
+    let vault = &session.as_ref()?.vault;
+    let mut notes = vault.notes().ok()?;
+    notes.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    notes.into_iter().next().map(|n| n.rel_path)
+}
+
+/// Loads the note at vault-relative `rel` into the editor and updates state.
+///
+/// Uses `set_initial_text` so the caret lands at the top of the freshly loaded
+/// note. Records it as current and as the vault's last-active note in config.
+fn load_note(state: &Rc<State>, rel: &Path) {
+    let text = {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        match session.vault.read_note(rel) {
+            Ok(text) => text,
+            Err(err) => {
+                eprintln!("jotter: could not read note {}: {err}", rel.display());
+                return;
+            }
+        }
+    };
+
+    state.editor.set_initial_text(&text);
+    *state.cached_caret.borrow_mut() = 0;
+    // If preview is showing, re-render so the switch does not show a stale page.
+    if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+        render_into_preview(state);
+    }
+
+    if let Some(session) = state.session.borrow().as_ref() {
+        session.current.replace(Some(rel.to_path_buf()));
+        let root = session.vault.root().to_path_buf();
+        let mut config = state.config.borrow_mut();
+        config.set_last_active(&root, rel);
+        config.save();
+    }
+}
+
+/// Builds (or rebuilds) the sidebar tree model and installs it on the `ListView`.
+///
+/// Returns the new `TreeListModel` so the session can hold it for later rebuilds.
+fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
+    let root_store = tree::root_store(root);
+    let root_owned = root.to_path_buf();
+
+    // Lazily produce a folder node's children; a file node returns None.
+    let tree_model = TreeListModel::new(root_store, false, false, move |item| {
+        let node = item.downcast_ref::<gtk::StringObject>()?;
+        let rel = node.string();
+        tree::child_store(&root_owned, &rel).map(Cast::upcast)
+    });
+
+    let selection = SingleSelection::new(Some(tree_model.clone()));
+    selection.set_autoselect(false);
+    selection.set_can_unselect(true);
+
+    let factory = SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let label = Label::builder().halign(gtk::Align::Start).build();
+        let expander = TreeExpander::new();
+        expander.set_child(Some(&label));
+        item.set_child(Some(&expander));
+    });
+    factory.connect_bind(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(row) = item.item().and_downcast::<TreeListRow>() else {
+            return;
+        };
+        let Some(expander) = item.child().and_downcast::<TreeExpander>() else {
+            return;
+        };
+        expander.set_list_row(Some(&row));
+        if let Some(node) = row.item().and_downcast::<gtk::StringObject>()
+            && let Some(label) = expander.child().and_downcast::<Label>()
+        {
+            label.set_text(tree::label_for(&node.string()));
+        }
+    });
+
+    let list_view = ListView::new(Some(selection.clone()), Some(factory));
+
+    // Activating a row (Enter or double-click) opens a file, or toggles a folder.
+    let activate_state = Rc::clone(state);
+    let activate_sel = selection.clone();
+    list_view.connect_activate(move |_, position| {
+        let Some(row) = activate_sel
+            .item(position)
+            .and_downcast::<TreeListRow>()
+        else {
+            return;
+        };
+        activate_row(&activate_state, &row);
+    });
+
+    // Single-selection change also opens a file, so a single click is enough.
+    let select_state = Rc::clone(state);
+    selection.connect_selection_changed(move |sel, _, _| {
+        let Some(row) = sel.selected_item().and_downcast::<TreeListRow>() else {
+            return;
+        };
+        if let Some(node) = row.item().and_downcast::<gtk::StringObject>() {
+            let rel = PathBuf::from(node.string().as_str());
+            if is_file_node(&select_state, &node.string()) {
+                load_note(&select_state, &rel);
+            }
+        }
+    });
+
+    wire_tree_context_menu(state, &list_view);
+
+    state.sidebar.set_child(Some(&list_view));
+    tree_model
+}
+
+/// Opens a file row or expands/collapses a folder row on activation.
+fn activate_row(state: &Rc<State>, row: &TreeListRow) {
+    let Some(node) = row.item().and_downcast::<gtk::StringObject>() else {
+        return;
+    };
+    let rel = node.string();
+    if is_file_node(state, &rel) {
+        load_note(state, &PathBuf::from(rel.as_str()));
+    } else {
+        row.set_expanded(!row.is_expanded());
+    }
+}
+
+/// True if the vault-relative `rel` names an existing file (not a folder).
+fn is_file_node(state: &Rc<State>, rel: &str) -> bool {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return false;
+    };
+    !tree::is_dir_path(session.vault.root(), rel)
+}
+
+/// Rebuilds the tree model to reflect a structural change (create/rename/delete).
+fn refresh_tree(state: &Rc<State>) {
+    let (root, expanded) = {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        // Capture which folders are open so the rebuild does not collapse the tree.
+        let expanded = expanded_paths(&session.tree_model.borrow());
+        (session.vault.root().to_path_buf(), expanded)
+    };
+    let model = build_tree(state, &root);
+    restore_expanded(&model, &expanded);
+    if let Some(session) = state.session.borrow().as_ref() {
+        *session.tree_model.borrow_mut() = model;
+    }
+    update_note_count(state);
+}
+
+/// Refreshes the status bar note count from the index after a structural change,
+/// so an in-app or external create/delete is reflected without a full reconcile.
+fn update_note_count(state: &Rc<State>) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    match session.index.count_notes() {
+        Ok(count) => state.status.set_text(&format!("Indexed {count} notes")),
+        Err(err) => eprintln!("jotter: could not count notes: {err}"),
+    }
+}
+
+/// Collects the vault-relative paths of every currently expanded folder row.
+fn expanded_paths(model: &TreeListModel) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for i in 0..model.n_items() {
+        if let Some(row) = model.item(i).and_downcast::<TreeListRow>()
+            && row.is_expanded()
+            && let Some(node) = row.item().and_downcast::<gtk::StringObject>()
+        {
+            set.insert(node.string().to_string());
+        }
+    }
+    set
+}
+
+/// Re-expands the folders named in `want` after a rebuild. Expanding a folder
+/// appends its children, so this repeats until the flattened list stops growing.
+fn restore_expanded(model: &TreeListModel, want: &HashSet<String>) {
+    if want.is_empty() {
+        return;
+    }
+    loop {
+        let mut changed = false;
+        for i in 0..model.n_items() {
+            if let Some(row) = model.item(i).and_downcast::<TreeListRow>()
+                && !row.is_expanded()
+                && let Some(node) = row.item().and_downcast::<gtk::StringObject>()
+                && want.contains(node.string().as_str())
+            {
+                row.set_expanded(true);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Reveals and selects the row for vault-relative `rel` after a tree rebuild.
+///
+/// Expands every ancestor folder so the target row exists in the flattened list,
+/// then selects it. Used to highlight a freshly created or renamed note.
+fn select_in_tree(state: &Rc<State>, rel: &Path) {
+    // Expand every ancestor folder so the target row is present after the rebuild.
+    let mut ancestors: HashSet<String> = HashSet::new();
+    let mut cur = rel.parent();
+    while let Some(dir) = cur {
+        let key = dir.to_string_lossy();
+        if !key.is_empty() {
+            ancestors.insert(key.into_owned());
+        }
+        cur = dir.parent();
+    }
+
+    let want = rel.to_string_lossy();
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let model = session.tree_model.borrow();
+    restore_expanded(&model, &ancestors);
+
+    let Some(list_view) = state.sidebar.child().and_downcast::<ListView>() else {
+        return;
+    };
+    let Some(selection) = list_view.model().and_downcast::<SingleSelection>() else {
+        return;
+    };
+    for i in 0..model.n_items() {
+        if let Some(row) = model.item(i).and_downcast::<TreeListRow>()
+            && let Some(node) = row.item().and_downcast::<gtk::StringObject>()
+            && node.string().as_str() == want
+        {
+            selection.set_selected(i);
+            break;
+        }
+    }
 }
 
 /// Match the `WebKit` preview zoom to the monitor scale so its text stays crisp
@@ -182,7 +628,7 @@ fn wire_preview_zoom(window: &ApplicationWindow, state: &Rc<State>) {
 
 /// Install a Ctrl+E accelerator that toggles the stack between edit and preview.
 fn wire_toggle(app: &Application, state: &Rc<State>) {
-    let action = gtk::gio::SimpleAction::new("toggle-mode", None);
+    let action = gio::SimpleAction::new("toggle-mode", None);
     let toggle_state = Rc::clone(state);
     action.connect_activate(move |_, _| toggle_mode(&toggle_state));
     app.add_action(&action);
@@ -206,9 +652,21 @@ fn toggle_mode(state: &Rc<State>) {
     }
 }
 
+/// Install a Ctrl+B accelerator that toggles the sidebar visibility.
+fn wire_sidebar_toggle(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("toggle-sidebar", None);
+    let sidebar_state = Rc::clone(state);
+    action.connect_activate(move |_, _| {
+        let visible = sidebar_state.sidebar.get_visible();
+        sidebar_state.sidebar.set_visible(!visible);
+    });
+    app.add_action(&action);
+    app.set_accels_for_action("app.toggle-sidebar", &["<Primary>b"]);
+}
+
 /// Install a Ctrl+T accelerator that switches the active theme between light and dark.
 fn wire_theme_toggle(app: &Application, state: &Rc<State>) {
-    let action = gtk::gio::SimpleAction::new("toggle-theme", None);
+    let action = gio::SimpleAction::new("toggle-theme", None);
     let theme_state = Rc::clone(state);
     action.connect_activate(move |_, _| toggle_theme_mode(&theme_state));
     app.add_action(&action);
@@ -287,16 +745,523 @@ fn wire_debounce(state: &Rc<State>) {
         }
 
         let timeout_state = Rc::clone(&changed_state);
-        let id = gtk::glib::timeout_add_local(
-            std::time::Duration::from_millis(DEBOUNCE_MS),
-            move || {
-                // The caret in preview mode is stale; re-read it before rendering.
-                *timeout_state.cached_caret.borrow_mut() = timeout_state.editor.caret_line();
-                render_into_preview(&timeout_state);
-                *timeout_state.pending.borrow_mut() = None;
-                gtk::glib::ControlFlow::Break
-            },
-        );
+        let id = gtk::glib::timeout_add_local(Duration::from_millis(DEBOUNCE_MS), move || {
+            // The caret in preview mode is stale; re-read it before rendering.
+            *timeout_state.cached_caret.borrow_mut() = timeout_state.editor.caret_line();
+            render_into_preview(&timeout_state);
+            *timeout_state.pending.borrow_mut() = None;
+            gtk::glib::ControlFlow::Break
+        });
         *changed_state.pending.borrow_mut() = Some(id);
     });
+}
+
+/// Spawns the background reconcile thread and drains its progress into the status
+/// bar. The thread opens its own index connection (`SQLite` is not `Send`).
+fn start_indexing(state: &Rc<State>, root: &Path) {
+    let (tx, rx) = std::sync::mpsc::channel::<IndexProgress>();
+    let thread_root = root.to_path_buf();
+    // A detached thread: it reports through the channel and needs no join handle.
+    std::thread::spawn(move || {
+        let report = |progress: IndexProgress| {
+            // If the UI dropped the receiver, indexing progress no longer matters.
+            let _ = tx.send(progress);
+        };
+        if let Err(err) = vault_session::reconcile_in_thread(&thread_root, &report) {
+            let _ = tx.send(IndexProgress::Failed(err.to_string()));
+        }
+    });
+
+    let status = state.status.clone();
+    gtk::glib::timeout_add_local(Duration::from_millis(DRAIN_MS), move || {
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(IndexProgress::Working { done, total }) => {
+                    status.set_text(&format!("Indexing {done}/{total}"));
+                }
+                Ok(IndexProgress::Done { total }) => {
+                    status.set_text(&format!("Indexed {total} notes"));
+                }
+                Ok(IndexProgress::Failed(msg)) => {
+                    eprintln!("jotter: indexing failed: {msg}");
+                    status.set_text("Indexing failed");
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if disconnected {
+            gtk::glib::ControlFlow::Break
+        } else {
+            gtk::glib::ControlFlow::Continue
+        }
+    });
+}
+
+/// Drains the watcher receiver on a timer, applying each change incrementally.
+fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
+    let drain_state = Rc::clone(state);
+    gtk::glib::timeout_add_local(Duration::from_millis(DRAIN_MS), move || {
+        let mut structural = false;
+        loop {
+            match rx.try_recv() {
+                Ok(change) => {
+                    if apply_change(&drain_state, &change) {
+                        structural = true;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                // The guard was dropped (vault closed); stop draining.
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return gtk::glib::ControlFlow::Break;
+                }
+            }
+        }
+        if structural {
+            refresh_tree(&drain_state);
+        }
+        gtk::glib::ControlFlow::Continue
+    });
+}
+
+/// Applies one watcher change to the index. Returns true if the tree structure
+/// changed (create/remove/rename) so the caller can refresh the tree once.
+fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return false;
+    };
+    match change {
+        VaultChange::Created(rel) | VaultChange::Modified(rel) => {
+            // The debouncer can report a brand-new file as Modified, so decide whether
+            // the tree needs a refresh by whether the index already knows the path, not
+            // by the event kind. A path the index has never seen is a new file.
+            let is_new = !matches!(
+                session.index.mtime_by_path(&vault_session::rel_to_key(rel)),
+                Ok(Some(_))
+            );
+            if let Err(err) = vault_session::reindex_note(&session.vault, &session.index, rel) {
+                eprintln!("jotter: reindex on change failed for {}: {err}", rel.display());
+            }
+            is_new
+        }
+        VaultChange::Removed(rel) => {
+            if let Err(err) = vault_session::deindex_note(&session.index, rel) {
+                eprintln!("jotter: deindex failed for {}: {err}", rel.display());
+            }
+            true
+        }
+        VaultChange::Renamed { from, to } => {
+            if let Err(err) = vault_session::deindex_note(&session.index, from) {
+                eprintln!("jotter: deindex on rename failed for {}: {err}", from.display());
+            }
+            if let Err(err) = vault_session::reindex_note(&session.vault, &session.index, to) {
+                eprintln!("jotter: reindex on rename failed for {}: {err}", to.display());
+            }
+            true
+        }
+    }
+}
+
+/// Wires a right-click context menu on the tree with note/folder operations.
+///
+/// The right-clicked row (not the selection) is the operation target, resolved by
+/// hit-testing the click and stashed in `target` for the actions to read. A click
+/// in empty space leaves `target` as `None`, meaning the vault root.
+fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
+    let menu = gio::Menu::new();
+    menu.append(Some("New note"), Some("app.tree-new-note"));
+    menu.append(Some("New folder"), Some("app.tree-new-folder"));
+    menu.append(Some("Rename"), Some("app.tree-rename"));
+    menu.append(Some("Delete to trash"), Some("app.tree-delete"));
+
+    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    popover.set_parent(list_view);
+    popover.set_has_arrow(false);
+
+    // Shared between the gesture (which sets it) and the actions (which read it).
+    let target: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
+
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_SECONDARY);
+    let popover_click = popover.clone();
+    let list_view_hit = list_view.clone();
+    let target_press = Rc::clone(&target);
+    gesture.connect_pressed(move |_, _, x, y| {
+        // Resolve the target from the row under the pointer, not the prior selection.
+        *target_press.borrow_mut() = row_at(&list_view_hit, x, y);
+        // Point the popover at the click; widget coordinates never exceed i32 range.
+        let rect = gdk::Rectangle::new(px_to_i32(x), px_to_i32(y), 1, 1);
+        popover_click.set_pointing_to(Some(&rect));
+        popover_click.popup();
+    });
+    list_view.add_controller(gesture);
+
+    install_tree_actions(state, &target);
+}
+
+/// The vault-relative path of the tree row under widget-local (`x`, `y`), if any.
+///
+/// Walks up from the picked widget to the row's `TreeExpander`, whose bound
+/// `TreeListRow` carries the node path. A click in empty space yields `None`.
+fn row_at(list_view: &ListView, x: f64, y: f64) -> Option<PathBuf> {
+    let list_view_widget: &gtk::Widget = list_view.upcast_ref();
+    let mut widget = list_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
+    loop {
+        if let Some(expander) = widget.downcast_ref::<TreeExpander>() {
+            let row = expander.list_row()?;
+            let node = row.item().and_downcast::<gtk::StringObject>()?;
+            return Some(PathBuf::from(node.string().as_str()));
+        }
+        if &widget == list_view_widget {
+            return None;
+        }
+        widget = widget.parent()?;
+    }
+}
+
+/// The vault-relative directory new items land in for a right-clicked `target`.
+///
+/// A folder target is that folder; a file target is its parent; `None` (empty
+/// space) is the vault root (empty path).
+fn target_dir(state: &Rc<State>, target: Option<&Path>) -> PathBuf {
+    match target {
+        None => PathBuf::new(),
+        Some(rel) => {
+            if is_file_node(state, &rel.to_string_lossy()) {
+                rel.parent().map(Path::to_path_buf).unwrap_or_default()
+            } else {
+                rel.to_path_buf()
+            }
+        }
+    }
+}
+
+/// Installs the four `app.tree-*` actions the context menu invokes.
+///
+/// Each reads the shared `target` (the right-clicked node) rather than the tree
+/// selection, so the operation acts on the row the user actually clicked.
+fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>) {
+    let Some(app) = gio::Application::default().and_downcast::<Application>() else {
+        return;
+    };
+
+    // New note: prompt for a name and create it under the target directory.
+    let new_note = gio::SimpleAction::new("tree-new-note", None);
+    let s = Rc::clone(state);
+    let t = Rc::clone(target);
+    new_note.connect_activate(move |_, _| {
+        let dir = target_dir(&s, t.borrow().as_deref());
+        let s2 = Rc::clone(&s);
+        prompt(&s, "New note", "name.md", move |name| {
+            create_note(&s2, &dir, &name);
+        });
+    });
+    app.add_action(&new_note);
+
+    // New folder: create a directory under the target (no vault folder API).
+    let new_folder = gio::SimpleAction::new("tree-new-folder", None);
+    let s = Rc::clone(state);
+    let t = Rc::clone(target);
+    new_folder.connect_activate(move |_, _| {
+        let dir = target_dir(&s, t.borrow().as_deref());
+        let s2 = Rc::clone(&s);
+        prompt(&s, "New folder", "folder", move |name| {
+            create_folder(&s2, &dir, &name);
+        });
+    });
+    app.add_action(&new_folder);
+
+    // Rename: only meaningful for a file target.
+    let rename = gio::SimpleAction::new("tree-rename", None);
+    let s = Rc::clone(state);
+    let t = Rc::clone(target);
+    rename.connect_activate(move |_, _| {
+        let Some(rel) = t.borrow().clone() else {
+            return;
+        };
+        if !is_file_node(&s, &rel.to_string_lossy()) {
+            return;
+        }
+        let default = rel
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("note.md")
+            .to_owned();
+        let s2 = Rc::clone(&s);
+        prompt(&s, "Rename note", &default, move |name| {
+            rename_note(&s2, &rel, &name);
+        });
+    });
+    app.add_action(&rename);
+
+    // Delete to trash: only for a file target.
+    let delete = gio::SimpleAction::new("tree-delete", None);
+    let s = Rc::clone(state);
+    let t = Rc::clone(target);
+    delete.connect_activate(move |_, _| {
+        let Some(rel) = t.borrow().clone() else {
+            return;
+        };
+        if is_file_node(&s, &rel.to_string_lossy()) {
+            delete_note(&s, &rel);
+        }
+    });
+    app.add_action(&delete);
+}
+
+/// Creates a note named `name` (defaulting the `.md` extension) under `dir`.
+fn create_note(state: &Rc<State>, dir: &Path, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    let mut file = dir.join(name);
+    if file.extension().is_none() {
+        file.set_extension("md");
+    }
+    // Scope the session borrow so refresh_tree can borrow it again below.
+    let created = {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        match session
+            .vault
+            .create_note(&file, format!("# {}\n\n", stem_of(&file)))
+        {
+            Ok(()) => {
+                let _ = vault_session::reindex_note(&session.vault, &session.index, &file);
+                true
+            }
+            Err(err) => {
+                eprintln!("jotter: could not create note {}: {err}", file.display());
+                false
+            }
+        }
+    };
+    refresh_tree(state);
+    // Open and reveal the new note so the user lands straight in it.
+    if created {
+        load_note(state, &file);
+        select_in_tree(state, &file);
+    }
+}
+
+/// Creates an empty folder named `name` under `dir` (there is no vault folder API,
+/// so this uses the filesystem directly under the verified vault root).
+fn create_folder(state: &Rc<State>, dir: &Path, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        let abs = session.vault.root().join(dir).join(name);
+        if let Err(err) = std::fs::create_dir_all(&abs) {
+            eprintln!("jotter: could not create folder {}: {err}", abs.display());
+        }
+    }
+    refresh_tree(state);
+}
+
+/// Renames the note at `rel` to `name` within the same directory.
+fn rename_note(state: &Rc<State>, rel: &Path, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    let parent = rel.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut to = parent.join(name);
+    if to.extension().is_none() {
+        to.set_extension("md");
+    }
+    let was_current;
+    {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        match session.vault.rename_note(rel, &to) {
+            Ok(()) => {
+                let _ = vault_session::deindex_note(&session.index, rel);
+                let _ = vault_session::reindex_note(&session.vault, &session.index, &to);
+            }
+            Err(err) => {
+                eprintln!("jotter: could not rename {}: {err}", rel.display());
+                return;
+            }
+        }
+        // If the renamed note was open, follow it to its new path.
+        was_current = session.current.borrow().as_deref() == Some(rel);
+    }
+    if was_current {
+        load_note(state, &to);
+    }
+    refresh_tree(state);
+    if was_current {
+        select_in_tree(state, &to);
+    }
+}
+
+/// Moves the note at `rel` to the vault trash and drops it from the index.
+fn delete_note(state: &Rc<State>, rel: &Path) {
+    {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        match session.vault.delete_to_trash(rel) {
+            Ok(()) => {
+                let _ = vault_session::deindex_note(&session.index, rel);
+            }
+            Err(err) => {
+                eprintln!("jotter: could not delete {}: {err}", rel.display());
+                return;
+            }
+        }
+    }
+    refresh_tree(state);
+}
+
+/// Rounds a widget-local coordinate to a pixel, clamped to the `i32` range.
+fn px_to_i32(value: f64) -> i32 {
+    let rounded = value.round();
+    if rounded >= f64::from(i32::MAX) {
+        i32::MAX
+    } else if rounded <= f64::from(i32::MIN) {
+        i32::MIN
+    } else {
+        // Clamped into i32 range above, so this conversion is exact and lossless.
+        #[allow(clippy::cast_possible_truncation, reason = "value is clamped to i32 range")]
+        {
+            rounded as i32
+        }
+    }
+}
+
+/// The filename stem of `path`, for a new note's default H1, or "note".
+fn stem_of(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("note")
+        .to_owned()
+}
+
+/// Shows a modal single-entry prompt; runs `on_ok(text)` when the user confirms.
+///
+/// Uses a plain transient `gtk::Window` (the old `gtk::Dialog` is deprecated since
+/// GTK 4.10). Enter or the OK button confirms, Escape or Cancel dismisses.
+fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str, on_ok: F) {
+    let parent = state.sidebar.root().and_downcast::<gtk::Window>();
+    let dialog = gtk::Window::builder()
+        .title(title)
+        .modal(true)
+        .default_width(360)
+        .build();
+    if let Some(parent) = parent.as_ref() {
+        dialog.set_transient_for(Some(parent));
+    }
+
+    let content = gtk::Box::new(Orientation::Vertical, 8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let entry = gtk::Entry::builder().text(default).build();
+    content.append(&entry);
+
+    let buttons = gtk::Box::new(Orientation::Horizontal, 8);
+    buttons.set_halign(gtk::Align::End);
+    let cancel = gtk::Button::with_label("Cancel");
+    let ok = gtk::Button::with_label("OK");
+    ok.add_css_class("suggested-action");
+    buttons.append(&cancel);
+    buttons.append(&ok);
+    content.append(&buttons);
+    dialog.set_child(Some(&content));
+
+    // OK and Enter run the callback once, then close; Cancel and Escape just close.
+    let on_ok = Rc::new(on_ok);
+    let confirm = {
+        let dialog = dialog.clone();
+        let entry = entry.clone();
+        let on_ok = Rc::clone(&on_ok);
+        move || {
+            on_ok(entry.text().to_string());
+            dialog.close();
+        }
+    };
+    let confirm_ok = confirm.clone();
+    ok.connect_clicked(move |_| confirm_ok());
+    entry.connect_activate(move |_| confirm());
+    let dialog_cancel = dialog.clone();
+    cancel.connect_clicked(move |_| dialog_cancel.close());
+
+    dialog.present();
+    entry.grab_focus();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Startup, resolve_startup};
+    use crate::config::Config;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    #[test]
+    fn directory_arg_opens_vault() {
+        let tmp = TempDir::new().unwrap();
+        let config = Config::default();
+        match resolve_startup(Some(&tmp.path().to_string_lossy()), &config) {
+            Startup::Vault { root, note } => {
+                assert_eq!(root, tmp.path());
+                assert!(note.is_none());
+            }
+            Startup::File(_) => panic!("expected vault startup for a directory arg"),
+        }
+    }
+
+    #[test]
+    fn file_arg_opens_single_file() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("note.md");
+        std::fs::write(&file, "x").unwrap();
+        let config = Config::default();
+        match resolve_startup(Some(&file.to_string_lossy()), &config) {
+            Startup::File(Some(path)) => assert_eq!(path, file),
+            Startup::File(None) => panic!("expected the file path, got the sample fallback"),
+            Startup::Vault { .. } => panic!("expected single-file startup, got a vault"),
+        }
+    }
+
+    #[test]
+    fn no_arg_no_config_uses_sample() {
+        let config = Config::default();
+        assert!(matches!(resolve_startup(None, &config), Startup::File(None)));
+    }
+
+    #[test]
+    fn no_arg_reopens_recent_vault_with_note() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "x").unwrap();
+        let mut config = Config::default();
+        config.push_recent(tmp.path());
+        config.set_last_active(tmp.path(), Path::new("a.md"));
+        match resolve_startup(None, &config) {
+            Startup::Vault { root, note } => {
+                assert_eq!(root, tmp.path());
+                assert_eq!(note.as_deref(), Some(Path::new("a.md")));
+            }
+            Startup::File(_) => panic!("expected a recent vault, got single-file startup"),
+        }
+    }
 }

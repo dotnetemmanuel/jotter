@@ -184,6 +184,42 @@ Pitfall guard: inotify has a per-user watch limit. Document the
 
 ---
 
+## Phase 2.5: visual language (target: 3 to 4 days)
+
+Goal: a deliberate neo-brutalist pass over the whole UI, done once phase 2 exists
+so every surface (chrome, sidebar, file tree, editor, preview) can be styled
+together against a single theme source. Until now the CSS was functional defaults
+out of the theming generators, never a design pass.
+
+Reference: https://dribbble.com/search/neo-brutalism (hard borders, flat blocks,
+offset/hard drop shadows, chunky focus rings, high-contrast accents, generous
+padding, minimal gradients). Keep the worf-inspired direction and the two bundled
+themes both working in light and dark.
+
+Tasks:
+- Extend the theme JSON schema with the neo-brutalist tokens: border widths and
+  colors, hard shadow offset/color, corner radius, focus-ring style, accent block
+  colors. Version the schema and update both bundled themes plus their snapshots.
+- `crates/theming/src/generate/gtk_css.rs`: style the native surfaces (header bar,
+  sidebar, file tree rows, buttons, entries, scrollbars, selection, focus) with the
+  new tokens. Note GTK CSS is a subset of web CSS, so express what GTK supports and
+  keep the look reading the same across the two engines.
+- `crates/theming/src/generate/preview_css.rs`: bring the rendered pane in line
+  (headings, blockquotes, tables, code blocks, inline code, links, task lists,
+  horizontal rules) so chrome and preview feel like one design.
+- Keep both engines driven by the same theme source so light/dark and theme
+  switching restyle everything at once with no visual drift between chrome and
+  preview.
+
+Acceptance:
+- Chrome, sidebar, tree, editor, and preview share one coherent neo-brutalist look
+  in all four theme/mode combinations, with no drift between GTK and preview.
+- `Ctrl+T` light/dark and a theme switch restyle every surface live.
+- Generator snapshot tests updated and green.
+- Commit: "phase 2.5: neo-brutalist visual language across chrome and preview".
+
+---
+
 ## Phase 3: wikilinks and search (target: 1 week)
 
 Goal: linking and finding notes.
