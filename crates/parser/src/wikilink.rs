@@ -45,9 +45,25 @@ impl Wikilink {
 /// frontmatter and raw HTML blocks. An embed (`![[x]]`) is not a link.
 #[must_use]
 pub fn scan(src: &str) -> Vec<Wikilink> {
+    scan_all(src).0
+}
+
+/// Spans that look like a wikilink but are deliberately not one: embeds
+/// (`![[x]]`) and backslash-escaped brackets (`\[[x]]`).
+///
+/// Code is excluded, since code already has styling of its own to keep. The
+/// editor uses this to stop the markdown grammar half-highlighting them.
+#[must_use]
+pub fn scan_inert(src: &str) -> Vec<Range<usize>> {
+    scan_all(src).1
+}
+
+/// One pass returning both the links and the lookalikes that are not links.
+fn scan_all(src: &str) -> (Vec<Wikilink>, Vec<Range<usize>>) {
     let skip = opaque_ranges(src);
     let bytes = src.as_bytes();
     let mut links = Vec::new();
+    let mut inert = Vec::new();
     let mut i = 0;
 
     while i < bytes.len() {
@@ -56,14 +72,25 @@ pub fn scan(src: &str) -> Vec<Wikilink> {
             continue;
         }
         match bytes[i] {
-            b'\\' => i += 2,
+            // An escape hides the bracket that follows, so \[[x]] is not a link.
+            b'\\' => {
+                i = match opening_at(bytes, i + 1).then(|| parse_at(src, i + 1)).flatten() {
+                    Some(link) => {
+                        let end = link.range.end;
+                        inert.push(i..end);
+                        end
+                    }
+                    None => i + 2,
+                };
+            }
             b'`' => i = skip_inline_code(bytes, i),
             b'[' if bytes.get(i + 1) == Some(&b'[') => {
-                if i > 0 && bytes[i - 1] == b'!' {
-                    i += 2;
-                    continue;
-                }
+                let embed = i > 0 && bytes[i - 1] == b'!';
                 match parse_at(src, i) {
+                    Some(link) if embed => {
+                        i = link.range.end;
+                        inert.push(i - link.range.len() - 1..i);
+                    }
                     Some(link) => {
                         i = link.range.end;
                         links.push(link);
@@ -75,7 +102,12 @@ pub fn scan(src: &str) -> Vec<Wikilink> {
         }
     }
 
-    links
+    (links, inert)
+}
+
+/// Whether a `[[` opens at `at`.
+fn opening_at(bytes: &[u8], at: usize) -> bool {
+    bytes.get(at) == Some(&b'[') && bytes.get(at + 1) == Some(&b'[')
 }
 
 /// Parse a wikilink starting at `open`, where `src[open..]` begins with `[[`.
@@ -375,6 +407,31 @@ mod tests {
     #[test]
     fn embed_syntax_is_not_a_link() {
         assert!(scan("![[picture]]").is_empty());
+    }
+
+    #[test]
+    fn inert_spans_cover_the_whole_lookalike() {
+        let src = r"a ![[pic]] b \[[esc]] c";
+        let inert = scan_inert(src);
+        let covered: Vec<&str> = inert.iter().map(|r| &src[r.clone()]).collect();
+        assert_eq!(covered, [r"![[pic]]", r"\[[esc]]"]);
+    }
+
+    #[test]
+    fn real_links_are_not_inert() {
+        assert!(scan_inert("[[real]]").is_empty());
+    }
+
+    #[test]
+    fn code_is_not_reported_as_inert() {
+        assert!(scan_inert("`[[x]]`\n\n```\n![[y]]\n```\n").is_empty());
+    }
+
+    #[test]
+    fn a_link_after_an_escape_still_scans() {
+        let links = scan(r"\[[esc]] then [[real]]");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "real");
     }
 
     #[test]

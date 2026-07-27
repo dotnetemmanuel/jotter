@@ -386,6 +386,7 @@ fn load_note(state: &Rc<State>, rel: &Path) {
 
     state.editor.set_initial_text(&text);
     *state.cached_caret.borrow_mut() = 0;
+    refresh_editor_links(state);
     // If preview is showing, re-render so the switch does not show a stale page.
     if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
         render_into_preview(state);
@@ -523,25 +524,48 @@ fn refresh_tree(state: &Rc<State>) {
     refresh_links(state);
 }
 
+/// Re-tag the wikilinks in the editor buffer so they match what the preview links.
+fn refresh_editor_links(state: &Rc<State>) {
+    let text = state.editor.text();
+    let session = state.session.borrow();
+    let spans: Vec<(std::ops::Range<usize>, bool)> = jotter_parser::wikilink::scan(&text)
+        .into_iter()
+        .map(|link| {
+            let resolved = session
+                .as_ref()
+                .is_some_and(|s| s.resolver.borrow().lookup(&link.target).is_some());
+            (link.range, resolved)
+        })
+        .collect();
+    drop(session);
+    state
+        .editor
+        .set_link_spans(&spans, &jotter_parser::wikilink::scan_inert(&text));
+}
+
 /// Rebuilds wikilink resolution from the index and re-resolves the links table.
 ///
 /// Runs on every structural change, so a note that appears or disappears flips
 /// the links pointing at it without a full reindex.
 fn refresh_links(state: &Rc<State>) {
-    let session = state.session.borrow();
-    let Some(session) = session.as_ref() else {
-        return;
-    };
-    match session.index.all_notes() {
-        Ok(notes) => {
-            let paths = notes.into_iter().map(|note| note.path);
-            *session.resolver.borrow_mut() = Resolver::new(paths);
+    {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        match session.index.all_notes() {
+            Ok(notes) => {
+                let paths = notes.into_iter().map(|note| note.path);
+                *session.resolver.borrow_mut() = Resolver::new(paths);
+            }
+            Err(err) => eprintln!("jotter: could not read note paths: {err}"),
         }
-        Err(err) => eprintln!("jotter: could not read note paths: {err}"),
+        if let Err(err) = vault_session::resolve_links(&session.index) {
+            eprintln!("jotter: could not resolve links: {err}");
+        }
     }
-    if let Err(err) = vault_session::resolve_links(&session.index) {
-        eprintln!("jotter: could not resolve links: {err}");
-    }
+    // A note appearing or vanishing flips whether open links are broken.
+    refresh_editor_links(state);
 }
 
 /// Refreshes the status bar note count from the index after a structural change,
@@ -1018,20 +1042,20 @@ fn nearest_heading(headings: &[jotter_parser::HeadingAnchor], caret_1based: i32)
 fn wire_debounce(state: &Rc<State>) {
     let changed_state = Rc::clone(state);
     state.editor.connect_changed(move || {
-        if changed_state.stack.visible_child_name().as_deref() != Some(PAGE_PREVIEW) {
-            return;
-        }
-
-        // Cancel a pending re-render so only the latest change fires.
+        // Cancel a pending pass so only the latest change fires.
         if let Some(old) = changed_state.pending.borrow_mut().take() {
             old.remove();
         }
 
         let timeout_state = Rc::clone(&changed_state);
         let id = gtk::glib::timeout_add_local(Duration::from_millis(DEBOUNCE_MS), move || {
-            // The caret in preview mode is stale; re-read it before rendering.
-            *timeout_state.cached_caret.borrow_mut() = timeout_state.editor.caret_line();
-            render_into_preview(&timeout_state);
+            // Tagging runs in either mode; the preview only re-renders when it shows.
+            refresh_editor_links(&timeout_state);
+            if timeout_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+                // The caret in preview mode is stale; re-read it before rendering.
+                *timeout_state.cached_caret.borrow_mut() = timeout_state.editor.caret_line();
+                render_into_preview(&timeout_state);
+            }
             *timeout_state.pending.borrow_mut() = None;
             gtk::glib::ControlFlow::Break
         });

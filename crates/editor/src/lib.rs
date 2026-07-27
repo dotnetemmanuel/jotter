@@ -6,8 +6,11 @@
 //! inside `connect_activate`) because it constructs GTK widgets, which needs an
 //! initialized display.
 
+use std::cell::RefCell;
 use std::fs;
+use std::ops::Range;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gtk::prelude::*;
 use sourceview5::prelude::*;
@@ -20,6 +23,47 @@ pub struct Editor {
     buffer: sourceview5::Buffer,
     // The View is wrapped in a ScrolledWindow so long documents scroll; this is what widget() returns.
     scroller: gtk::ScrolledWindow,
+    /// Tag worn by a wikilink that resolves to an existing note.
+    link_tag: gtk::TextTag,
+    /// Tag worn by a wikilink with no note behind it.
+    broken_link_tag: gtk::TextTag,
+    /// Tag that flattens wikilink lookalikes the markdown grammar half-styles.
+    inert_tag: gtk::TextTag,
+    /// Byte ranges of the followable links, for the Ctrl+hover cursor.
+    link_ranges: Rc<RefCell<Vec<Range<usize>>>>,
+}
+
+/// Maps byte offsets in a buffer to the (line, byte-in-line) pairs GTK wants.
+///
+/// Offsets arrive in document order, so the scan never restarts.
+struct LineIndex<'a> {
+    text: &'a str,
+    line: i32,
+    line_start: usize,
+}
+
+impl<'a> LineIndex<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            line: 0,
+            line_start: 0,
+        }
+    }
+
+    /// Line and byte-within-line for `offset`, or `None` if it is out of range.
+    fn locate(&mut self, offset: usize) -> Option<(i32, i32)> {
+        if offset > self.text.len() {
+            return None;
+        }
+        while let Some(next) = self.text[self.line_start..offset].find('\n') {
+            self.line_start += next + 1;
+            self.line += 1;
+        }
+        i32::try_from(offset - self.line_start)
+            .ok()
+            .map(|column| (self.line, column))
+    }
 }
 
 impl Editor {
@@ -54,10 +98,46 @@ impl Editor {
             .child(&view)
             .build();
 
+        let link_tag = gtk::TextTag::builder()
+            .name(LINK_TAG)
+            .foreground(&theme.editor.syntax.link)
+            .underline(gtk::pango::Underline::Single)
+            .build();
+        let broken_link_tag = gtk::TextTag::builder()
+            .name(BROKEN_LINK_TAG)
+            .foreground(&theme.preview.muted)
+            .underline(gtk::pango::Underline::Error)
+            .build();
+        let inert_tag = gtk::TextTag::builder()
+            .name(INERT_TAG)
+            .foreground(&theme.editor.foreground)
+            .underline(gtk::pango::Underline::None)
+            .build();
+        let table = buffer.tag_table();
+        table.add(&inert_tag);
+        table.add(&link_tag);
+        table.add(&broken_link_tag);
+
+        // The highlight engine adds its tags lazily, outranking ours on a fresh
+        // load, so take the top back every time it finishes a region.
+        {
+            let tags = [inert_tag.clone(), broken_link_tag.clone(), link_tag.clone()];
+            buffer.connect_highlight_updated(move |buffer, _, _| {
+                raise_tags(&buffer.tag_table(), &tags);
+            });
+        }
+
+        let link_ranges: Rc<RefCell<Vec<Range<usize>>>> = Rc::new(RefCell::new(Vec::new()));
+        wire_link_cursor(&view, &buffer, &link_ranges);
+
         Self {
             view,
             buffer,
             scroller,
+            link_tag,
+            broken_link_tag,
+            inert_tag,
+            link_ranges,
         }
     }
 
@@ -95,6 +175,59 @@ impl Editor {
         self.buffer.end_user_action();
     }
 
+    /// Style byte ranges as wikilinks, replacing any previous ones.
+    ///
+    /// Each span is `(range, resolved)`. The ranges come from the wikilink
+    /// scanner, so what lights up here is exactly what the preview links: a
+    /// `[[x]]` inside code or after a backslash is not in the list and stays
+    /// plain, which the markdown grammar alone cannot manage.
+    pub fn set_link_spans(&self, spans: &[(Range<usize>, bool)], inert: &[Range<usize>]) {
+        let (start, end) = self.buffer.bounds();
+        for tag in [&self.link_tag, &self.broken_link_tag, &self.inert_tag] {
+            self.buffer.remove_tag(tag, &start, &end);
+        }
+
+        let text = self.buffer.text(&start, &end, true);
+        let mut lines = LineIndex::new(&text);
+        // One shared cursor over the text means the spans must arrive in order.
+        let tagged = spans
+            .iter()
+            .map(|(range, resolved)| {
+                let tag = if *resolved {
+                    &self.link_tag
+                } else {
+                    &self.broken_link_tag
+                };
+                (range, tag)
+            })
+            .chain(inert.iter().map(|range| (range, &self.inert_tag)));
+        let mut tagged: Vec<_> = tagged.collect();
+        tagged.sort_by_key(|(range, _)| range.start);
+
+        for (range, tag) in tagged {
+            let (Some(from), Some(to)) = (lines.locate(range.start), lines.locate(range.end)) else {
+                continue;
+            };
+            let (Some(from), Some(to)) = (
+                self.buffer.iter_at_line_index(from.0, from.1),
+                self.buffer.iter_at_line_index(to.0, to.1),
+            ) else {
+                continue;
+            };
+            self.buffer.apply_tag(tag, &from, &to);
+        }
+
+        *self.link_ranges.borrow_mut() = spans.iter().map(|(range, _)| range.clone()).collect();
+        raise_tags(
+            &self.buffer.tag_table(),
+            &[
+                self.inert_tag.clone(),
+                self.broken_link_tag.clone(),
+                self.link_tag.clone(),
+            ],
+        );
+    }
+
     /// Call `f` with the clicked byte offset in the buffer on a Ctrl+Click.
     ///
     /// The offset is in bytes, matching what the wikilink scanner reports.
@@ -111,17 +244,10 @@ impl Editor {
             {
                 return;
             }
-            #[allow(clippy::cast_possible_truncation)]
-            let (bx, by) = view.window_to_buffer_coords(
-                gtk::TextWindowType::Widget,
-                x as i32,
-                y as i32,
-            );
-            let Some(iter) = view.iter_at_location(bx, by) else {
+            let Some(offset) = offset_at(&view, &buffer, x, y) else {
                 return;
             };
-            let start = buffer.start_iter();
-            f(buffer.text(&start, &iter, true).len());
+            f(offset);
             gesture.set_state(gtk::EventSequenceState::Claimed);
         });
 
@@ -150,6 +276,9 @@ impl Editor {
     /// left as applied at construction to avoid stacking display providers.
     pub fn set_theme(&self, theme: &Theme) {
         register_and_apply_scheme(&self.buffer, theme);
+        self.link_tag.set_foreground(Some(&theme.editor.syntax.link));
+        self.broken_link_tag
+            .set_foreground(Some(&theme.preview.muted));
     }
 
     /// Give keyboard focus to the editor view.
@@ -161,6 +290,101 @@ impl Editor {
     pub fn connect_changed<F: Fn() + 'static>(&self, f: F) {
         self.buffer.connect_changed(move |_| f());
     }
+}
+
+/// Tag name for a resolved wikilink in the source buffer.
+const LINK_TAG: &str = "jotter-wikilink";
+/// Tag name for a wikilink with no note behind it.
+const BROKEN_LINK_TAG: &str = "jotter-wikilink-broken";
+/// Tag name for a wikilink lookalike that is not a link.
+const INERT_TAG: &str = "jotter-wikilink-inert";
+
+/// Move `tags` above every syntax tag, last one highest.
+fn raise_tags(table: &gtk::TextTagTable, tags: &[gtk::TextTag]) {
+    let top = table.size() - 1;
+    for tag in tags {
+        tag.set_priority(top);
+    }
+}
+
+/// Show a pointer cursor while Ctrl is held over a link, so it reads as clickable.
+fn wire_link_cursor(
+    view: &sourceview5::View,
+    buffer: &sourceview5::Buffer,
+    ranges: &Rc<RefCell<Vec<Range<usize>>>>,
+) {
+    let pointer = Rc::new(RefCell::new((0.0_f64, 0.0_f64)));
+
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let (view, buffer, ranges, pointer) = (
+            view.clone(),
+            buffer.clone(),
+            Rc::clone(ranges),
+            Rc::clone(&pointer),
+        );
+        motion.connect_motion(move |controller, x, y| {
+            *pointer.borrow_mut() = (x, y);
+            let held = controller
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            apply_link_cursor(&view, &buffer, &ranges, held, (x, y));
+        });
+    }
+    {
+        let view = view.clone();
+        motion.connect_leave(move |_| view.set_cursor(None));
+    }
+    view.add_controller(motion);
+
+    // Pressing or releasing Ctrl changes the cursor without the pointer moving.
+    let keys = gtk::EventControllerKey::new();
+    {
+        let (view, buffer, ranges, pointer) = (
+            view.clone(),
+            buffer.clone(),
+            Rc::clone(ranges),
+            Rc::clone(&pointer),
+        );
+        keys.connect_modifiers(move |_, state| {
+            let held = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            apply_link_cursor(&view, &buffer, &ranges, held, *pointer.borrow());
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    view.add_controller(keys);
+}
+
+/// Set or clear the pointer cursor for the widget coordinates `at`.
+fn apply_link_cursor(
+    view: &sourceview5::View,
+    buffer: &sourceview5::Buffer,
+    ranges: &Rc<RefCell<Vec<Range<usize>>>>,
+    ctrl_held: bool,
+    at: (f64, f64),
+) {
+    let over_link = ctrl_held
+        && offset_at(view, buffer, at.0, at.1)
+            .is_some_and(|offset| ranges.borrow().iter().any(|r| r.contains(&offset)));
+    if over_link {
+        view.set_cursor_from_name(Some("pointer"));
+    } else {
+        view.set_cursor(None);
+    }
+}
+
+/// Byte offset in the buffer under the widget coordinates `(x, y)`.
+#[allow(clippy::cast_possible_truncation)]
+fn offset_at(
+    view: &sourceview5::View,
+    buffer: &sourceview5::Buffer,
+    x: f64,
+    y: f64,
+) -> Option<usize> {
+    let (bx, by) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+    let iter = view.iter_at_location(bx, by)?;
+    let start = buffer.start_iter();
+    Some(buffer.text(&start, &iter, true).len())
 }
 
 /// Directory `GtkSourceView` searches for user style scheme XML files.
