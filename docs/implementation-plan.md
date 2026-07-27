@@ -8,10 +8,29 @@ This document is the execution guide. Work top to bottom. Do not start a phase
 until the previous phase meets its acceptance criteria. Ship phases 0 through 5
 before touching any v1.5 feature.
 
-## Status (2026-07-17)
+## Status (2026-07-27)
 
-Phases 0 and 1 are complete. Phase 1 shipped the theming crate, the instant
-edit-preview toggle, and a polish pass:
+Phases 0 through 2.5 are complete and on `main`. Next up is Phase 3 (wikilinks
+and search).
+
+Phase 2 shipped `crates/vault` (enumerate with ignore rules, atomic IO,
+delete-to-trash, debounced `notify` watcher), `crates/index` (SQLite, migrations
+by `user_version`, FTS5 with `contentless_delete=1`), and the `app` wiring:
+sidebar `TreeListModel`, `Ctrl+B`, background indexer, watcher drain, right-click
+file operations, and recents plus last-active note in the config. The context
+menu targets the row under the pointer via a hit test rather than the current
+selection, so operations land in the folder that was actually clicked, and empty
+space targets the vault root.
+
+Phase 2.5 landed as a flat, Bauhaus-leaning take on the neo-brutalist brief:
+small crisp corners, no drop shadows, and thick lines used structurally instead
+of as boxes. The sidebar recolors with the theme, entries are underlines rather
+than framed boxes, and the preview picked up bold geometric headings, framed code
+blocks, and an accent quote bar. Chrome and preview are driven by the same theme
+tokens, so `Ctrl+T` restyles every surface at once.
+
+Phase 1 shipped the theming crate, the instant edit-preview toggle, and a polish
+pass:
 
 - Preview theme CSS is embedded as an author `<style>` per render, not a
   `webkit6::UserStyleSheet` (that dropped table cell padding or the body
@@ -23,9 +42,6 @@ edit-preview toggle, and a polish pass:
 - `Ctrl+T` switches the active theme between light and dark, recoloring the
   preview in place via `reload_bypass_cache` so the scroll position is preserved.
 - App id is `dev.jotter.Jotter`.
-
-Next: Phase 2 (vault): open a folder as a vault, file tree, notify watcher, and
-the SQLite index scaffolding.
 
 ## Identity and paths
 
