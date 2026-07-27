@@ -288,9 +288,11 @@ Acceptance:
 Pitfall guard: never rewrite wikilinks inside code fences or inline code. Preprocess
 with code-context awareness, not a blind document-wide regex.
 
-Known gap, not phase 3: there is still no save. `vault.write_note` exists but the
-only caller is the wikilink typo rewrite, which persists the buffer itself. Editing
-a note and closing the window loses the edit. Fix this before daily-driving.
+Saving landed alongside phase 3a (it was missing entirely: `vault.write_note` had
+no caller). `Ctrl+S` writes through the vault and reindexes, or writes the file
+directly in single-file mode, gated on a dirty flag. Switching notes and closing
+the window both save first, silently. Still absent: any autosave on a timer, and
+any conflict handling if the file changed on disk under an unsaved buffer.
 
 ---
 
