@@ -15,7 +15,10 @@ use thiserror::Error;
 ///
 /// Each entry is `(number, sql)`. Adding `002_*.sql` later means appending one line
 /// here; `run_migrations` applies only those whose number exceeds `user_version`.
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../migrations/001_init.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../migrations/001_init.sql")),
+    (2, include_str!("../migrations/002_link_target.sql")),
+];
 
 /// Errors surfaced by the index. Typed so callers can react without string matching.
 #[derive(Debug, Error)]
@@ -61,13 +64,28 @@ pub struct Note {
     pub frontmatter: Option<String>,
 }
 
-/// One outbound link from a note to a target path.
+/// One outbound link from a note to a target.
 #[derive(Debug, Clone)]
 pub struct LinkRecord {
+    /// The target exactly as written in the note, never rewritten.
+    pub target: String,
     /// Resolved relative path, or the raw target when unresolved.
     pub dst_path: String,
     /// Whether the link resolved to an existing note.
     pub resolved: bool,
+}
+
+impl LinkRecord {
+    /// An unresolved link to `target`, for [`Index::reresolve_links`] to settle.
+    #[must_use]
+    pub fn unresolved(target: impl Into<String>) -> Self {
+        let target = target.into();
+        Self {
+            dst_path: target.clone(),
+            target,
+            resolved: false,
+        }
+    }
 }
 
 /// A handle to the vault index. Wraps one synchronous `SQLite` connection.
@@ -189,10 +207,16 @@ impl Index {
         tx.execute("DELETE FROM links WHERE src_note_id = ?1", params![note_id])?;
         {
             let mut stmt = tx.prepare(
-                "INSERT OR IGNORE INTO links (src_note_id, dst_path, resolved) VALUES (?1, ?2, ?3)",
+                "INSERT OR IGNORE INTO links (src_note_id, target, dst_path, resolved)
+                 VALUES (?1, ?2, ?3, ?4)",
             )?;
             for link in links {
-                stmt.execute(params![note_id, link.dst_path, i64::from(link.resolved)])?;
+                stmt.execute(params![
+                    note_id,
+                    link.target,
+                    link.dst_path,
+                    i64::from(link.resolved)
+                ])?;
             }
         }
         tx.commit()?;
@@ -201,12 +225,11 @@ impl Index {
 
     /// Re-runs `resolve` over every distinct link target and stores the outcome.
     ///
-    /// A link is stored under whatever target string it currently has, so this is
-    /// idempotent: a target that resolves is rewritten to the note path it found,
-    /// and a path whose note disappeared falls back to unresolved under the same
-    /// string. Run it after a full index and after any create, rename, or delete.
+    /// Targets are never rewritten, so this always asks the same question a fresh
+    /// scan of the note would: a stem stays a stem even after it once matched a
+    /// path. Run it whenever the set of notes changes, and after reindexing a note.
     ///
-    /// Returns the number of link rows whose target or resolved flag changed.
+    /// Returns the number of link rows whose destination or resolved flag changed.
     ///
     /// # Errors
     /// Returns [`IndexError::Sqlite`] on any read or write failure.
@@ -214,10 +237,16 @@ impl Index {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let current: Vec<(String, bool)> = {
-            let mut stmt = self.conn.prepare("SELECT DISTINCT dst_path, resolved FROM links")?;
+        let current: Vec<(String, String, bool)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT DISTINCT target, dst_path, resolved FROM links")?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? != 0,
+                ))
             })?;
             rows.collect::<Result<_, _>>()?
         };
@@ -225,16 +254,14 @@ impl Index {
         let tx = self.conn.unchecked_transaction()?;
         let mut changed = 0;
         {
-            // OR REPLACE: two links from one note can collapse onto the same target.
-            let mut stmt = tx.prepare(
-                "UPDATE OR REPLACE links SET dst_path = ?1, resolved = ?2 WHERE dst_path = ?3",
-            )?;
-            for (target, was_resolved) in current {
+            let mut stmt =
+                tx.prepare("UPDATE links SET dst_path = ?1, resolved = ?2 WHERE target = ?3")?;
+            for (target, was_dst, was_resolved) in current {
                 let (dst, resolved) = match resolve(&target) {
                     Some(path) => (path, true),
                     None => (target.clone(), false),
                 };
-                if dst == target && resolved == was_resolved {
+                if dst == was_dst && resolved == was_resolved {
                     continue;
                 }
                 changed += stmt.execute(params![dst, i64::from(resolved), target])?;
@@ -334,7 +361,8 @@ impl Index {
     pub fn backlinks(&self, dst_path: &str) -> Result<Vec<i64>, IndexError> {
         let mut stmt = self
             .conn
-            .prepare("SELECT src_note_id FROM links WHERE dst_path = ?1 AND resolved = 1")?;
+            // DISTINCT: one note can reach the same target by stem and by path.
+            .prepare("SELECT DISTINCT src_note_id FROM links WHERE dst_path = ?1 AND resolved = 1")?;
         let rows = stmt.query_map(params![dst_path], |row| row.get(0))?;
         let mut ids = Vec::new();
         for id in rows {
@@ -476,7 +504,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         let table_count: i64 = index
             .conn
             .query_row(
@@ -554,8 +582,8 @@ mod tests {
             .set_links(
                 id,
                 &[
-                    LinkRecord { dst_path: "b.md".into(), resolved: true },
-                    LinkRecord { dst_path: "c.md".into(), resolved: false },
+                    LinkRecord::unresolved("b.md"),
+                    LinkRecord::unresolved("c.md"),
                 ],
             )
             .unwrap();
@@ -567,7 +595,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 2);
         index
-            .set_links(id, &[LinkRecord { dst_path: "d.md".into(), resolved: true }])
+            .set_links(id, &[LinkRecord::unresolved("d.md")])
             .unwrap();
         let count: i64 = index
             .conn
@@ -597,7 +625,7 @@ mod tests {
         let index = Index::open_in_memory().unwrap();
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index
-            .set_links(id, &[LinkRecord { dst_path: "standup".into(), resolved: false }])
+            .set_links(id, &[LinkRecord::unresolved("standup")])
             .unwrap();
 
         let changed = index
@@ -613,7 +641,7 @@ mod tests {
         let index = Index::open_in_memory().unwrap();
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index
-            .set_links(id, &[LinkRecord { dst_path: "work/standup.md".into(), resolved: true }])
+            .set_links(id, &[LinkRecord { target: "work/standup.md".into(), dst_path: "work/standup.md".into(), resolved: true }])
             .unwrap();
 
         index.reresolve_links(|_| None).unwrap();
@@ -626,7 +654,7 @@ mod tests {
         let index = Index::open_in_memory().unwrap();
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index
-            .set_links(id, &[LinkRecord { dst_path: "standup".into(), resolved: false }])
+            .set_links(id, &[LinkRecord::unresolved("standup")])
             .unwrap();
         let resolve = |t: &str| {
             matches!(t, "standup" | "work/standup.md").then(|| "work/standup.md".to_owned())
@@ -638,15 +666,37 @@ mod tests {
     }
 
     #[test]
-    fn reresolve_collapses_two_targets_onto_one_note() {
+    fn reresolve_keeps_asking_about_the_written_target() {
+        let index = Index::open_in_memory().unwrap();
+        let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(id, &[LinkRecord::unresolved("standup")])
+            .unwrap();
+
+        // First the stem matches the personal note, then that note is deleted.
+        index
+            .reresolve_links(|_| Some("personal/standup.md".to_owned()))
+            .unwrap();
+        index
+            .reresolve_links(|target| {
+                (target == "standup").then(|| "work/standup.md".to_owned())
+            })
+            .unwrap();
+
+        // The stem must fall through to the surviving note, not go broken.
+        assert_eq!(link_rows(&index), [("work/standup.md".to_owned(), true)]);
+    }
+
+    #[test]
+    fn two_targets_may_point_at_one_note() {
         let index = Index::open_in_memory().unwrap();
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index
             .set_links(
                 id,
                 &[
-                    LinkRecord { dst_path: "standup".into(), resolved: false },
-                    LinkRecord { dst_path: "Standup".into(), resolved: false },
+                    LinkRecord::unresolved("standup"),
+                    LinkRecord::unresolved("Standup"),
                 ],
             )
             .unwrap();
@@ -655,7 +705,15 @@ mod tests {
             .reresolve_links(|_| Some("work/standup.md".to_owned()))
             .unwrap();
 
-        assert_eq!(link_rows(&index), [("work/standup.md".to_owned(), true)]);
+        // Both rows survive under their own targets; backlinks dedups them.
+        assert_eq!(
+            link_rows(&index),
+            [
+                ("work/standup.md".to_owned(), true),
+                ("work/standup.md".to_owned(), true)
+            ]
+        );
+        assert_eq!(index.backlinks("work/standup.md").unwrap(), vec![id]);
     }
 
     #[test]
@@ -664,10 +722,10 @@ mod tests {
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
         let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
         index
-            .set_links(a, &[LinkRecord { dst_path: "target.md".into(), resolved: true }])
+            .set_links(a, &[LinkRecord { target: "target.md".into(), dst_path: "target.md".into(), resolved: true }])
             .unwrap();
         index
-            .set_links(b, &[LinkRecord { dst_path: "target.md".into(), resolved: false }])
+            .set_links(b, &[LinkRecord::unresolved("target.md")])
             .unwrap();
         assert_eq!(index.backlinks("target.md").unwrap(), vec![a]);
     }
@@ -678,14 +736,14 @@ mod tests {
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
         let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
         index
-            .set_links(a, &[LinkRecord { dst_path: "missing.md".into(), resolved: false }])
+            .set_links(a, &[LinkRecord::unresolved("missing.md")])
             .unwrap();
         index
             .set_links(
                 b,
                 &[
-                    LinkRecord { dst_path: "missing.md".into(), resolved: false },
-                    LinkRecord { dst_path: "other.md".into(), resolved: false },
+                    LinkRecord::unresolved("missing.md"),
+                    LinkRecord::unresolved("other.md"),
                 ],
             )
             .unwrap();
@@ -726,7 +784,7 @@ mod tests {
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index.set_tags(id, &["t".into()]).unwrap();
         index
-            .set_links(id, &[LinkRecord { dst_path: "b.md".into(), resolved: true }])
+            .set_links(id, &[LinkRecord::unresolved("b.md")])
             .unwrap();
         assert!(index.remove_note_by_path("a.md").unwrap());
         let tag_count: i64 = index
@@ -761,7 +819,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         let stored = index.note_by_path("a.md").unwrap().unwrap();
         assert_eq!(stored.id, id);
         assert_eq!(index.all_notes().unwrap().len(), 1);

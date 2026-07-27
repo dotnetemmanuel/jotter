@@ -78,6 +78,18 @@ pub fn reindex_note(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Reindexes one note and settles its link resolution.
+///
+/// The incremental counterpart to [`reindex_note`], which leaves links
+/// unresolved because a full index resolves once at the end instead of per note.
+///
+/// # Errors
+/// Returns an error if the reindex or the resolve pass fails.
+pub fn reindex_note_resolved(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
+    reindex_note(vault, index, rel)?;
+    resolve_links(index)
+}
+
 /// Outbound wikilinks of a note, stored under their raw targets.
 ///
 /// Resolution is deliberately deferred to [`resolve_links`]: during a full index
@@ -85,10 +97,7 @@ pub fn reindex_note(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
 fn outbound_links(text: &str) -> Vec<LinkRecord> {
     jotter_parser::wikilink::scan(text)
         .into_iter()
-        .map(|link| LinkRecord {
-            dst_path: link.target,
-            resolved: false,
-        })
+        .map(|link| LinkRecord::unresolved(link.target))
         .collect()
 }
 

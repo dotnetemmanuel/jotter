@@ -978,7 +978,7 @@ fn save_current_note(state: &Rc<State>, text: &str) {
         eprintln!("jotter: could not save {}: {err}", rel.display());
         return;
     }
-    if let Err(err) = vault_session::reindex_note(&session.vault, &session.index, &rel) {
+    if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, &rel) {
         eprintln!("jotter: could not reindex {}: {err}", rel.display());
     }
 }
@@ -1133,7 +1133,7 @@ fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
                 session.index.mtime_by_path(&vault_session::rel_to_key(rel)),
                 Ok(Some(_))
             );
-            if let Err(err) = vault_session::reindex_note(&session.vault, &session.index, rel) {
+            if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, rel) {
                 eprintln!("jotter: reindex on change failed for {}: {err}", rel.display());
             }
             is_new
@@ -1148,7 +1148,7 @@ fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
             if let Err(err) = vault_session::deindex_note(&session.index, from) {
                 eprintln!("jotter: deindex on rename failed for {}: {err}", from.display());
             }
-            if let Err(err) = vault_session::reindex_note(&session.vault, &session.index, to) {
+            if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, to) {
                 eprintln!("jotter: reindex on rename failed for {}: {err}", to.display());
             }
             true
@@ -1335,7 +1335,7 @@ fn create_note_at(state: &Rc<State>, rel: &Path) {
                 .create_note(rel, format!("# {}\n\n", stem_of(rel)))
             {
                 Ok(()) => {
-                    let _ = vault_session::reindex_note(&session.vault, &session.index, rel);
+                    let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, rel);
                     true
                 }
                 Err(err) => {
@@ -1393,7 +1393,7 @@ fn rename_note(state: &Rc<State>, rel: &Path, name: &str) {
         match session.vault.rename_note(rel, &to) {
             Ok(()) => {
                 let _ = vault_session::deindex_note(&session.index, rel);
-                let _ = vault_session::reindex_note(&session.vault, &session.index, &to);
+                let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, &to);
             }
             Err(err) => {
                 eprintln!("jotter: could not rename {}: {err}", rel.display());

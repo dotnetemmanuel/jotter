@@ -83,9 +83,10 @@ CREATE TABLE tags (
 
 CREATE TABLE links (
   src_note_id  INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-  dst_path     TEXT NOT NULL,          -- resolved relative path, or raw target if unresolved
+  target       TEXT NOT NULL,          -- link target exactly as written in the note
+  dst_path     TEXT NOT NULL,          -- resolved relative path, or the target if unresolved
   resolved     INTEGER NOT NULL,       -- 0 or 1
-  PRIMARY KEY (src_note_id, dst_path)
+  PRIMARY KEY (src_note_id, target)
 );
 
 CREATE INDEX idx_links_dst ON links(dst_path);
@@ -100,15 +101,19 @@ CREATE VIRTUAL TABLE notes_fts USING fts5(
 ```
 
 Key queries:
-- Backlinks: `SELECT src_note_id FROM links WHERE dst_path = ? AND resolved = 1`.
+- Backlinks: `SELECT DISTINCT src_note_id FROM links WHERE dst_path = ? AND resolved = 1`.
 - Broken links: `SELECT dst_path, count(*) FROM links WHERE resolved = 0 GROUP BY dst_path`.
 
-`dst_path` always holds a string that is itself a valid link target, so resolution
-can be re-run over the table at any time: a target that resolves is rewritten to
-the note path it found, and a path whose note disappears stays put as unresolved.
-Indexing a note therefore stores its raw targets unresolved, and a re-resolve pass
-runs after a full index and after every create, rename, or delete, which is when a
-link's state can change.
+`target` is never rewritten, so re-resolution always asks the same question a fresh
+scan of the note would: a stem stays a stem even after it once matched a path.
+Storing only the resolved path narrows it, and a stem whose winning note is deleted
+then goes broken instead of falling through to the note still on disk. Indexing
+writes targets unresolved; the resolve pass fills in `dst_path` and `resolved`. It
+runs once after a full index (not per note, which would be quadratic) and after
+every incremental reindex, since an edit can add or remove links.
+
+Two targets in one note can resolve to the same note (`[[standup]]` and
+`[[work/standup]]`), hence the `DISTINCT` in the backlinks query.
 
 Migrations are numbered `NNN_description.sql` and applied in order on connection open.
 A `schema_version` pragma or a meta table tracks the applied migration number.
