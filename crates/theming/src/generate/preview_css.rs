@@ -30,7 +30,7 @@ h2 {{\n  font-size: 1.7em;\n}}\n\n\
 h3 {{\n  font-size: 1.32em;\n}}\n\n\
 h4 {{\n  font-size: 1.12em;\n}}\n\n\
 a {{\n  color: {link};\n  text-decoration-thickness: 2px;\n  text-underline-offset: 2px;\n}}\n\n\
-a.broken-link {{\n  color: {muted};\n  text-decoration: underline dashed;\n}}\n\n\
+a.broken-link, a[href^=\"jotter-new:\"] {{\n  color: {muted};\n  text-decoration: underline dashed;\n}}\n\n\
 code {{\n  font-family: {mono_font};\n  background: {code_bg};\n  padding: 0.15em 0.35em;\n  border-radius: {r}px;\n}}\n\n\
 pre {{\n  background: {code_bg};\n  padding: 1rem;\n  border: {bw}px solid {table_border};\n  border-radius: {r}px;\n  overflow: auto;\n}}\n\n\
 pre code {{\n  background: transparent;\n  padding: 0;\n}}\n\n\

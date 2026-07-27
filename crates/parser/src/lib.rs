@@ -3,10 +3,14 @@
 //! highlighting driven by the active theme, and a source-line to heading-anchor
 //! map for scroll synchronization between the editor and the preview.
 
+pub mod wikilink;
+
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Anchorizer, Arena, Options};
 use jotter_theming::Code;
 use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSet};
+
+pub use wikilink::Wikilink;
 
 /// A rendered document: HTML plus a source-line to heading-anchor map.
 pub struct Rendered {
@@ -43,12 +47,14 @@ fn base_options() -> Options<'static> {
 
 /// Render markdown to an HTML fragment with a heading anchor map.
 ///
-/// Fenced code blocks are highlighted with a syntect theme derived from `code`.
+/// Wikilinks are rewritten to links through `resolver` first, then fenced code
+/// blocks are highlighted with a syntect theme derived from `code`.
 #[must_use]
-pub fn render(src: &str, code: &Code) -> Rendered {
+pub fn render(src: &str, code: &Code, resolver: &dyn wikilink::LinkResolver) -> Rendered {
+    let src = wikilink::rewrite(src, resolver);
     let options = base_options();
     let arena = Arena::new();
-    let root = comrak::parse_document(&arena, src, &options);
+    let root = comrak::parse_document(&arena, &src, &options);
 
     let headings = collect_headings(root);
 
@@ -62,9 +68,6 @@ pub fn render(src: &str, code: &Code) -> Rendered {
     let mut html = String::new();
     // format_document_with_plugins only fails if the Write sink fails; a String never does.
     let _ = comrak::html::format_document_with_plugins(root, &options, &mut html, &plugins);
-
-    // Wikilink seam (phase 3): rewriting [[target]] must be code-context aware,
-    // never touching text inside fenced blocks or inline code spans.
 
     Rendered { html, headings }
 }

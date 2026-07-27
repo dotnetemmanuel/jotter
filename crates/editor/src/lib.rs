@@ -95,6 +95,39 @@ impl Editor {
         self.buffer.end_user_action();
     }
 
+    /// Call `f` with the clicked byte offset in the buffer on a Ctrl+Click.
+    ///
+    /// The offset is in bytes, matching what the wikilink scanner reports.
+    pub fn connect_ctrl_click<F: Fn(usize) + 'static>(&self, f: F) {
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(gtk::gdk::BUTTON_PRIMARY);
+
+        let view = self.view.clone();
+        let buffer = self.buffer.clone();
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            if !gesture
+                .current_event_state()
+                .contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            {
+                return;
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            let (bx, by) = view.window_to_buffer_coords(
+                gtk::TextWindowType::Widget,
+                x as i32,
+                y as i32,
+            );
+            let Some(iter) = view.iter_at_location(bx, by) else {
+                return;
+            };
+            let start = buffer.start_iter();
+            f(buffer.text(&start, &iter, true).len());
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+
+        self.view.add_controller(gesture);
+    }
+
     /// 0-based line of the caret.
     #[must_use]
     pub fn caret_line(&self) -> i32 {

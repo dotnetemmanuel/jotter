@@ -48,6 +48,11 @@ and command dispatcher. The binary only constructs the GTK Application and hands
 - Toggle to preview -> `parser` (frontmatter strip -> wikilink rewrite -> comrak ->
   syntect) produces HTML + a line-to-heading anchor map -> `preview` loads it with
   injected CSS and scrolls to the anchor nearest the caret line.
+- Follow a link -> `preview` reports the clicked uri instead of navigating ->
+  `jotter-note:` opens that note, `jotter-new:` offers near matches or creates it,
+  anything else goes to the system browser. Wikilinks resolve through an in-memory
+  stem and path map the app rebuilds from the index on every structural change, so
+  rendering never queries the database per link.
 - External change -> `notify` debounced event -> `index` incremental reindex ->
   affected UI panels refresh (tree, backlinks, tags).
 
@@ -97,6 +102,13 @@ CREATE VIRTUAL TABLE notes_fts USING fts5(
 Key queries:
 - Backlinks: `SELECT src_note_id FROM links WHERE dst_path = ? AND resolved = 1`.
 - Broken links: `SELECT dst_path, count(*) FROM links WHERE resolved = 0 GROUP BY dst_path`.
+
+`dst_path` always holds a string that is itself a valid link target, so resolution
+can be re-run over the table at any time: a target that resolves is rewritten to
+the note path it found, and a path whose note disappears stays put as unresolved.
+Indexing a note therefore stores its raw targets unresolved, and a re-resolve pass
+runs after a full index and after every create, rename, or delete, which is when a
+link's state can change.
 
 Migrations are numbered `NNN_description.sql` and applied in order on connection open.
 A `schema_version` pragma or a meta table tracks the applied migration number.

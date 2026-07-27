@@ -4,6 +4,7 @@
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
 mod config;
+mod links;
 mod title;
 mod tree;
 mod vault_session;
@@ -31,6 +32,7 @@ use jotter_theming::{Mode, Theme, ThemeFile};
 use jotter_vault::{Vault, VaultChange, WatchGuard};
 
 use config::Config;
+use links::{LinkTarget, Resolver};
 use vault_session::IndexProgress;
 
 /// Reverse-DNS application id, stable for GTK settings and Wayland app matching.
@@ -46,6 +48,9 @@ const DEBOUNCE_MS: u64 = 150;
 
 /// How often the GTK loop drains the watcher receiver and index progress channel.
 const DRAIN_MS: u64 = 200;
+
+/// How many near matches to offer when a wikilink target does not exist.
+const MAX_SUGGESTIONS: usize = 5;
 
 /// Fallback document shown when no path is given or a read fails.
 const SAMPLE_MARKDOWN: &str = "# jotter\n\nA native GTK4 markdown vault.\n\n## Toggle\n\nPress Ctrl+E to switch between edit and preview.\n\n## Code\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
@@ -64,6 +69,8 @@ struct VaultSession {
     tree_model: RefCell<TreeListModel>,
     /// Currently loaded note, vault-relative, if any.
     current: RefCell<Option<PathBuf>>,
+    /// Wikilink target lookup, rebuilt from the index on structural change.
+    resolver: RefCell<Resolver>,
 }
 
 /// Shared, single-threaded application state cloned into GTK closures.
@@ -89,6 +96,8 @@ struct State {
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
     config: RefCell<Config>,
+    /// Heading anchor a followed wikilink asked for, consumed by the next render.
+    pending_anchor: RefCell<Option<String>>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -215,6 +224,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         status: status.clone(),
         session: RefCell::new(None),
         config: RefCell::new(config),
+        pending_anchor: RefCell::new(None),
     });
 
     // Load content per the resolved startup target, opening a vault if requested.
@@ -227,6 +237,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     wire_theme_toggle(app, &state);
     wire_sidebar_toggle(app, &state);
     wire_debounce(&state);
+    wire_preview_links(&state);
+    wire_editor_links(&state);
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
@@ -317,7 +329,11 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         _watch: watch,
         tree_model: RefCell::new(tree_model),
         current: RefCell::new(None),
+        resolver: RefCell::new(Resolver::default()),
     }));
+
+    // The index persists across runs, so links can resolve before reindexing runs.
+    refresh_links(state);
 
     // Record the vault in recents and persist right away.
     {
@@ -504,6 +520,28 @@ fn refresh_tree(state: &Rc<State>) {
         *session.tree_model.borrow_mut() = model;
     }
     update_note_count(state);
+    refresh_links(state);
+}
+
+/// Rebuilds wikilink resolution from the index and re-resolves the links table.
+///
+/// Runs on every structural change, so a note that appears or disappears flips
+/// the links pointing at it without a full reindex.
+fn refresh_links(state: &Rc<State>) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    match session.index.all_notes() {
+        Ok(notes) => {
+            let paths = notes.into_iter().map(|note| note.path);
+            *session.resolver.borrow_mut() = Resolver::new(paths);
+        }
+        Err(err) => eprintln!("jotter: could not read note paths: {err}"),
+    }
+    if let Err(err) = vault_session::resolve_links(&session.index) {
+        eprintln!("jotter: could not resolve links: {err}");
+    }
 }
 
 /// Refreshes the status bar note count from the index after a structural change,
@@ -706,21 +744,257 @@ fn toggle_theme_mode(state: &Rc<State>) {
     // it is showing. Preserve scroll so the recolor does not jump the reader.
     if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
         let text = state.editor.text();
-        let rendered = jotter_parser::render(&text, &state.theme.borrow().code);
+        let rendered = render_markdown(state, &text);
         state.preview.rerender_preserving_scroll(&rendered.html);
+    }
+}
+
+/// Render the editor text with the active theme and the vault's link resolver.
+///
+/// Single-file mode has no vault, so every wikilink there renders as broken.
+fn render_markdown(state: &Rc<State>, text: &str) -> jotter_parser::Rendered {
+    let code = &state.theme.borrow().code;
+    match state.session.borrow().as_ref() {
+        Some(session) => jotter_parser::render(text, code, &*session.resolver.borrow()),
+        None => jotter_parser::render(text, code, &Resolver::default()),
     }
 }
 
 /// Parse the editor buffer, load it into the preview, and scroll to the heading
 /// nearest the cached caret line.
+///
+/// An anchor requested by a followed wikilink wins over the caret heading and is
+/// consumed here, so it applies to exactly one render.
 fn render_into_preview(state: &Rc<State>) {
     let text = state.editor.text();
-    let rendered = jotter_parser::render(&text, &state.theme.borrow().code);
+    let rendered = render_markdown(state, &text);
 
+    let requested = state.pending_anchor.borrow_mut().take();
     // Caret is 0-based, heading source lines are 1-based, so compare in 1-based.
     let caret_1based = *state.cached_caret.borrow() + 1;
-    let anchor = nearest_heading(&rendered.headings, caret_1based);
+    let anchor = requested
+        .as_deref()
+        .or_else(|| nearest_heading(&rendered.headings, caret_1based));
     state.preview.render(&rendered.html, anchor);
+}
+
+/// Route links clicked in the preview: notes open here, unresolved ones prompt,
+/// and anything else goes to the system browser rather than hijacking the pane.
+fn wire_preview_links(state: &Rc<State>) {
+    let link_state = Rc::clone(state);
+    state.preview.connect_link_clicked(move |uri| match links::parse_uri(uri) {
+        LinkTarget::Note { path, anchor } => open_note_link(&link_state, &path, anchor),
+        LinkTarget::New(target) => follow_broken_link(&link_state, &target),
+        LinkTarget::External(uri) => launch_external(&uri),
+    });
+}
+
+/// Ctrl+Click in the editor follows the wikilink under the pointer.
+fn wire_editor_links(state: &Rc<State>) {
+    let link_state = Rc::clone(state);
+    state.editor.connect_ctrl_click(move |offset| {
+        let text = link_state.editor.text();
+        let Some(link) = jotter_parser::wikilink::scan(&text)
+            .into_iter()
+            .find(|link| link.range.contains(&offset))
+        else {
+            return;
+        };
+        let resolved = link_state
+            .session
+            .borrow()
+            .as_ref()
+            .and_then(|session| session.resolver.borrow().lookup(&link.target));
+        match resolved {
+            Some(path) => {
+                let anchor = link.heading.as_deref().map(jotter_parser::wikilink::anchor_slug);
+                open_note_link(&link_state, Path::new(&path), anchor);
+            }
+            None => follow_broken_link(&link_state, &link.target),
+        }
+    });
+}
+
+/// Open a wikilink target, scrolling the preview to `anchor` if it named one.
+fn open_note_link(state: &Rc<State>, rel: &Path, anchor: Option<String>) {
+    let exists = state
+        .session
+        .borrow()
+        .as_ref()
+        .is_some_and(|session| session.vault.root().join(rel).is_file());
+    if !exists {
+        // The index outran the filesystem; treat it as broken so the user can act.
+        follow_broken_link(state, &rel.to_string_lossy());
+        return;
+    }
+    *state.pending_anchor.borrow_mut() = anchor;
+    load_note(state, rel);
+    select_in_tree(state, rel);
+}
+
+/// Handle a click on a link with no note behind it: offer near matches when the
+/// target looks like a typo, otherwise create the note straight away.
+fn follow_broken_link(state: &Rc<State>, target: &str) {
+    let suggestions = state
+        .session
+        .borrow()
+        .as_ref()
+        .map(|session| session.resolver.borrow().suggestions(target, MAX_SUGGESTIONS))
+        .unwrap_or_default();
+
+    if suggestions.is_empty() {
+        create_note_for_link(state, target);
+    } else {
+        choose_link_target(state, target, &suggestions);
+    }
+}
+
+/// Create the note a broken link points at, then open it.
+fn create_note_for_link(state: &Rc<State>, target: &str) {
+    let source = state
+        .session
+        .borrow()
+        .as_ref()
+        .and_then(|session| session.current.borrow().clone());
+    let rel = links::new_note_path(target, source.as_deref());
+    create_note_at(state, &rel);
+}
+
+/// Ask which existing note a mistyped link meant, with creating it as the last
+/// option. Choosing a note also fixes the link text in the source.
+fn choose_link_target(state: &Rc<State>, target: &str, suggestions: &[String]) {
+    let parent = state.sidebar.root().and_downcast::<gtk::Window>();
+    let dialog = gtk::Window::builder()
+        .title(format!("No note named \"{target}\""))
+        .modal(true)
+        .default_width(420)
+        .build();
+    if let Some(parent) = parent.as_ref() {
+        dialog.set_transient_for(Some(parent));
+    }
+
+    let content = gtk::Box::new(Orientation::Vertical, 8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    for path in suggestions {
+        list.append(&gtk::Label::builder().label(path).xalign(0.0).build());
+    }
+    let create_label = format!("Create \"{target}\"");
+    list.append(&gtk::Label::builder().label(&create_label).xalign(0.0).build());
+    content.append(&list);
+    dialog.set_child(Some(&content));
+
+    // Row index maps back to a suggestion, or past the end to the create action.
+    let choices: Vec<String> = suggestions.to_vec();
+    let chooser = Rc::clone(state);
+    let target = target.to_owned();
+    let chosen_dialog = dialog.clone();
+    list.connect_row_activated(move |_, row| {
+        let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
+        chosen_dialog.close();
+        match choices.get(index) {
+            Some(path) => {
+                rewrite_link_target(&chooser, &target, path);
+                open_note_link(&chooser, Path::new(path), None);
+            }
+            None => create_note_for_link(&chooser, &target),
+        }
+    });
+
+    let escape = gtk::EventControllerKey::new();
+    let escape_dialog = dialog.clone();
+    escape.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk::gdk::Key::Escape {
+            escape_dialog.close();
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    dialog.add_controller(escape);
+
+    dialog.present();
+    if let Some(first) = list.row_at_index(0) {
+        list.select_row(Some(&first));
+        first.grab_focus();
+    }
+}
+
+/// Point every `[[from]]` in the open note at `chosen` instead, then save.
+///
+/// The whole buffer is written back, which is also the only way an edit reaches
+/// disk today: there is no save command yet.
+fn rewrite_link_target(state: &Rc<State>, from: &str, chosen: &str) {
+    let replacement = state
+        .session
+        .borrow()
+        .as_ref()
+        .map(|session| session.resolver.borrow().shortest_target(chosen));
+    let Some(replacement) = replacement else {
+        return;
+    };
+
+    let text = state.editor.text();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for link in jotter_parser::wikilink::scan(&text) {
+        if link.target != from {
+            continue;
+        }
+        out.push_str(&text[cursor..link.range.start]);
+        out.push_str(&links::format_wikilink(
+            &replacement,
+            link.heading.as_deref(),
+            link.alias.as_deref(),
+        ));
+        cursor = link.range.end;
+    }
+    if cursor == 0 {
+        return;
+    }
+    out.push_str(&text[cursor..]);
+
+    let caret = state.editor.caret_line();
+    state.editor.set_text(&out);
+    state.editor.set_caret_line(caret);
+    save_current_note(state, &out);
+}
+
+/// Write `text` to the open note and reindex it.
+fn save_current_note(state: &Rc<State>, text: &str) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let current = session.current.borrow().clone();
+    let Some(rel) = current else {
+        return;
+    };
+    if let Err(err) = session.vault.write_note(&rel, text) {
+        eprintln!("jotter: could not save {}: {err}", rel.display());
+        return;
+    }
+    if let Err(err) = vault_session::reindex_note(&session.vault, &session.index, &rel) {
+        eprintln!("jotter: could not reindex {}: {err}", rel.display());
+    }
+}
+
+/// Hand a non-note uri to the desktop, so the preview never navigates away.
+fn launch_external(uri: &str) {
+    let launcher = gtk::UriLauncher::new(uri);
+    launcher.launch(
+        None::<&gtk::Window>,
+        None::<&gio::Cancellable>,
+        |result| {
+            if let Err(err) = result {
+                eprintln!("jotter: could not open link: {err}");
+            }
+        },
+    );
 }
 
 /// Pick the anchor for the heading nearest at or above `caret_1based`.
@@ -782,6 +1056,7 @@ fn start_indexing(state: &Rc<State>, root: &Path) {
     });
 
     let status = state.status.clone();
+    let index_state = Rc::clone(state);
     gtk::glib::timeout_add_local(Duration::from_millis(DRAIN_MS), move || {
         let mut disconnected = false;
         loop {
@@ -791,6 +1066,11 @@ fn start_indexing(state: &Rc<State>, root: &Path) {
                 }
                 Ok(IndexProgress::Done { total }) => {
                     status.set_text(&format!("Indexed {total} notes"));
+                    // Links that looked broken against a partial index may resolve now.
+                    refresh_links(&index_state);
+                    if index_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+                        render_into_preview(&index_state);
+                    }
                 }
                 Ok(IndexProgress::Failed(msg)) => {
                     eprintln!("jotter: indexing failed: {msg}");
@@ -1033,31 +1313,43 @@ fn create_note(state: &Rc<State>, dir: &Path, name: &str) {
     if file.extension().is_none() {
         file.set_extension("md");
     }
+    create_note_at(state, &file);
+}
+
+/// Creates a note at a vault-relative path, then opens and reveals it.
+///
+/// A path that already exists is opened rather than treated as an error, so a
+/// link followed against a stale index still lands somewhere sensible.
+fn create_note_at(state: &Rc<State>, rel: &Path) {
     // Scope the session borrow so refresh_tree can borrow it again below.
     let created = {
         let session_ref = state.session.borrow();
         let Some(session) = session_ref.as_ref() else {
             return;
         };
-        match session
-            .vault
-            .create_note(&file, format!("# {}\n\n", stem_of(&file)))
-        {
-            Ok(()) => {
-                let _ = vault_session::reindex_note(&session.vault, &session.index, &file);
-                true
-            }
-            Err(err) => {
-                eprintln!("jotter: could not create note {}: {err}", file.display());
-                false
+        if session.vault.root().join(rel).is_file() {
+            true
+        } else {
+            match session
+                .vault
+                .create_note(rel, format!("# {}\n\n", stem_of(rel)))
+            {
+                Ok(()) => {
+                    let _ = vault_session::reindex_note(&session.vault, &session.index, rel);
+                    true
+                }
+                Err(err) => {
+                    eprintln!("jotter: could not create note {}: {err}", rel.display());
+                    false
+                }
             }
         }
     };
     refresh_tree(state);
     // Open and reveal the new note so the user lands straight in it.
     if created {
-        load_note(state, &file);
-        select_in_tree(state, &file);
+        load_note(state, rel);
+        select_in_tree(state, rel);
     }
 }
 

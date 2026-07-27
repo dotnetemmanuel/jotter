@@ -19,7 +19,9 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 use webkit6::prelude::*;
-use webkit6::{LoadEvent, Settings, WebView};
+use webkit6::{
+    LoadEvent, NavigationPolicyDecision, NavigationType, PolicyDecisionType, Settings, WebView,
+};
 
 /// The rendered-markdown preview: a `WebKit` web view with theme CSS injected.
 pub struct Preview {
@@ -80,6 +82,33 @@ impl Preview {
             pending_anchor,
             counter: RefCell::new(0),
         }
+    }
+
+    /// Call `f` with the target uri whenever the reader clicks a link, and stop
+    /// the preview from navigating there itself.
+    ///
+    /// Only user link clicks are intercepted; our own document loads are not.
+    pub fn connect_link_clicked<F: Fn(&str) + 'static>(&self, f: F) {
+        self.view.connect_decide_policy(move |_, decision, kind| {
+            if kind != PolicyDecisionType::NavigationAction {
+                return false;
+            }
+            let Ok(navigation) = decision.clone().downcast::<NavigationPolicyDecision>() else {
+                return false;
+            };
+            let Some(action) = navigation.navigation_action() else {
+                return false;
+            };
+            if action.navigation_type() != NavigationType::LinkClicked {
+                return false;
+            }
+            let Some(uri) = action.request().and_then(|request| request.uri()) else {
+                return false;
+            };
+            decision.ignore();
+            f(&uri);
+            true
+        });
     }
 
     /// Swap the theme CSS (for example after a light/dark switch). The change is

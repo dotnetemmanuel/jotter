@@ -199,6 +199,51 @@ impl Index {
         Ok(())
     }
 
+    /// Re-runs `resolve` over every distinct link target and stores the outcome.
+    ///
+    /// A link is stored under whatever target string it currently has, so this is
+    /// idempotent: a target that resolves is rewritten to the note path it found,
+    /// and a path whose note disappeared falls back to unresolved under the same
+    /// string. Run it after a full index and after any create, rename, or delete.
+    ///
+    /// Returns the number of link rows whose target or resolved flag changed.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on any read or write failure.
+    pub fn reresolve_links<F>(&self, resolve: F) -> Result<usize, IndexError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let current: Vec<(String, bool)> = {
+            let mut stmt = self.conn.prepare("SELECT DISTINCT dst_path, resolved FROM links")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+            })?;
+            rows.collect::<Result<_, _>>()?
+        };
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut changed = 0;
+        {
+            // OR REPLACE: two links from one note can collapse onto the same target.
+            let mut stmt = tx.prepare(
+                "UPDATE OR REPLACE links SET dst_path = ?1, resolved = ?2 WHERE dst_path = ?3",
+            )?;
+            for (target, was_resolved) in current {
+                let (dst, resolved) = match resolve(&target) {
+                    Some(path) => (path, true),
+                    None => (target.clone(), false),
+                };
+                if dst == target && resolved == was_resolved {
+                    continue;
+                }
+                changed += stmt.execute(params![dst, i64::from(resolved), target])?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
     /// Removes a note by path. Tags and links cascade; the FTS row is dropped too.
     /// Returns whether a note existed at that path.
     ///
@@ -531,6 +576,86 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    /// Every link row as (`dst_path`, resolved), ordered for stable assertions.
+    fn link_rows(index: &Index) -> Vec<(String, bool)> {
+        let mut stmt = index
+            .conn
+            .prepare("SELECT dst_path, resolved FROM links ORDER BY dst_path")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+            })
+            .unwrap();
+        rows.map(Result::unwrap).collect()
+    }
+
+    #[test]
+    fn reresolve_promotes_a_target_that_now_exists() {
+        let index = Index::open_in_memory().unwrap();
+        let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(id, &[LinkRecord { dst_path: "standup".into(), resolved: false }])
+            .unwrap();
+
+        let changed = index
+            .reresolve_links(|t| (t == "standup").then(|| "work/standup.md".to_owned()))
+            .unwrap();
+
+        assert_eq!(changed, 1);
+        assert_eq!(link_rows(&index), [("work/standup.md".to_owned(), true)]);
+    }
+
+    #[test]
+    fn reresolve_demotes_a_target_that_disappeared() {
+        let index = Index::open_in_memory().unwrap();
+        let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(id, &[LinkRecord { dst_path: "work/standup.md".into(), resolved: true }])
+            .unwrap();
+
+        index.reresolve_links(|_| None).unwrap();
+
+        assert_eq!(link_rows(&index), [("work/standup.md".to_owned(), false)]);
+    }
+
+    #[test]
+    fn reresolve_is_idempotent() {
+        let index = Index::open_in_memory().unwrap();
+        let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(id, &[LinkRecord { dst_path: "standup".into(), resolved: false }])
+            .unwrap();
+        let resolve = |t: &str| {
+            matches!(t, "standup" | "work/standup.md").then(|| "work/standup.md".to_owned())
+        };
+
+        index.reresolve_links(resolve).unwrap();
+        assert_eq!(index.reresolve_links(resolve).unwrap(), 0);
+        assert_eq!(link_rows(&index), [("work/standup.md".to_owned(), true)]);
+    }
+
+    #[test]
+    fn reresolve_collapses_two_targets_onto_one_note() {
+        let index = Index::open_in_memory().unwrap();
+        let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(
+                id,
+                &[
+                    LinkRecord { dst_path: "standup".into(), resolved: false },
+                    LinkRecord { dst_path: "Standup".into(), resolved: false },
+                ],
+            )
+            .unwrap();
+
+        index
+            .reresolve_links(|_| Some("work/standup.md".to_owned()))
+            .unwrap();
+
+        assert_eq!(link_rows(&index), [("work/standup.md".to_owned(), true)]);
     }
 
     #[test]
