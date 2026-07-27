@@ -279,6 +279,8 @@ impl Editor {
         self.link_tag.set_foreground(Some(&theme.editor.syntax.link));
         self.broken_link_tag
             .set_foreground(Some(&theme.preview.muted));
+        self.inert_tag
+            .set_foreground(Some(&theme.editor.foreground));
     }
 
     /// Give keyboard focus to the editor view.

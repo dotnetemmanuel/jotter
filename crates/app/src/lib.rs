@@ -9,7 +9,7 @@ mod title;
 mod tree;
 mod vault_session;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -98,6 +98,10 @@ struct State {
     config: RefCell<Config>,
     /// Heading anchor a followed wikilink asked for, consumed by the next render.
     pending_anchor: RefCell<Option<String>>,
+    /// Whether the buffer has edits not yet written to disk.
+    dirty: Cell<bool>,
+    /// Path open in single-file mode, absent in vault mode and for the sample.
+    single_file: RefCell<Option<PathBuf>>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -225,6 +229,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
+        dirty: Cell::new(false),
+        single_file: RefCell::new(None),
     });
 
     // Load content per the resolved startup target, opening a vault if requested.
@@ -239,6 +245,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     wire_debounce(&state);
     wire_preview_links(&state);
     wire_editor_links(&state);
+    wire_save(app, &state);
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
@@ -284,6 +291,8 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
         None => SAMPLE_MARKDOWN.to_owned(),
     };
     state.editor.set_initial_text(&initial);
+    state.single_file.replace(path.map(Path::to_path_buf));
+    state.dirty.set(false);
     // Single-file mode has an empty, non-interactive sidebar.
     state.status.set_text("no vault open");
 }
@@ -386,6 +395,7 @@ fn load_note(state: &Rc<State>, rel: &Path) {
 
     state.editor.set_initial_text(&text);
     *state.cached_caret.borrow_mut() = 0;
+    state.dirty.set(false);
     refresh_editor_links(state);
     // If preview is showing, re-render so the switch does not show a stale page.
     if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
@@ -985,26 +995,70 @@ fn rewrite_link_target(state: &Rc<State>, from: &str, chosen: &str) {
     let caret = state.editor.caret_line();
     state.editor.set_text(&out);
     state.editor.set_caret_line(caret);
-    save_current_note(state, &out);
+    save_note(state);
 }
 
-/// Write `text` to the open note and reindex it.
-fn save_current_note(state: &Rc<State>, text: &str) {
+/// Install `Ctrl+S`, which writes the buffer to the file it came from.
+fn wire_save(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("save", None);
+    let save_state = Rc::clone(state);
+    action.connect_activate(move |_, _| save_note(&save_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.save", &["<Primary>s"]);
+}
+
+/// Save the buffer to disk, reporting the outcome in the status bar.
+///
+/// Works in both modes: a vault note goes through the vault and is reindexed, a
+/// single opened file is written directly. The built-in sample has nowhere to go.
+fn save_note(state: &Rc<State>) {
+    if !state.dirty.get() {
+        state.status.set_text("No changes");
+        return;
+    }
+    let text = state.editor.text();
+
+    let saved = if state.session.borrow().is_some() {
+        save_current_note(state, &text)
+    } else {
+        save_single_file(state, &text)
+    };
+
+    match saved {
+        Some(name) => {
+            state.dirty.set(false);
+            state.status.set_text(&format!("Saved {name}"));
+        }
+        None => state.status.set_text("Nothing to save"),
+    }
+}
+
+/// Write `text` to the open note and reindex it. Returns the name saved.
+fn save_current_note(state: &Rc<State>, text: &str) -> Option<String> {
     let session = state.session.borrow();
-    let Some(session) = session.as_ref() else {
-        return;
-    };
-    let current = session.current.borrow().clone();
-    let Some(rel) = current else {
-        return;
-    };
+    let session = session.as_ref()?;
+    let rel = session.current.borrow().clone()?;
+
     if let Err(err) = session.vault.write_note(&rel, text) {
         eprintln!("jotter: could not save {}: {err}", rel.display());
-        return;
+        state.status.set_text("Save failed");
+        return None;
     }
     if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, &rel) {
         eprintln!("jotter: could not reindex {}: {err}", rel.display());
     }
+    Some(rel.display().to_string())
+}
+
+/// Write `text` to the file opened in single-file mode. Returns the name saved.
+fn save_single_file(state: &Rc<State>, text: &str) -> Option<String> {
+    let path = state.single_file.borrow().clone()?;
+    if let Err(err) = std::fs::write(&path, text) {
+        eprintln!("jotter: could not save {}: {err}", path.display());
+        state.status.set_text("Save failed");
+        return None;
+    }
+    Some(path.display().to_string())
 }
 
 /// Hand a non-note uri to the desktop, so the preview never navigates away.
@@ -1042,6 +1096,8 @@ fn nearest_heading(headings: &[jotter_parser::HeadingAnchor], caret_1based: i32)
 fn wire_debounce(state: &Rc<State>) {
     let changed_state = Rc::clone(state);
     state.editor.connect_changed(move || {
+        changed_state.dirty.set(true);
+
         // Cancel a pending pass so only the latest change fires.
         if let Some(old) = changed_state.pending.borrow_mut().take() {
             old.remove();
@@ -1051,6 +1107,9 @@ fn wire_debounce(state: &Rc<State>) {
         let id = gtk::glib::timeout_add_local(Duration::from_millis(DEBOUNCE_MS), move || {
             // Tagging runs in either mode; the preview only re-renders when it shows.
             refresh_editor_links(&timeout_state);
+            if timeout_state.dirty.get() {
+                timeout_state.status.set_text("Unsaved changes (Ctrl+S)");
+            }
             if timeout_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
                 // The caret in preview mode is stale; re-read it before rendering.
                 *timeout_state.cached_caret.borrow_mut() = timeout_state.editor.caret_line();
