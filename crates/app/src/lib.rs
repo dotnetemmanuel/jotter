@@ -157,6 +157,21 @@ fn apply_chrome_css(provider: &CssProvider, theme: &Theme) {
     provider.load_from_string(&theme.to_gtk_css());
 }
 
+/// Put the chrome CSS on a display-level provider, returned so a theme toggle can
+/// restyle it in place.
+fn install_chrome_css(theme: &Theme) -> CssProvider {
+    let provider = CssProvider::new();
+    apply_chrome_css(&provider, theme);
+    if let Some(display) = gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+    provider
+}
+
 /// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
 fn build_ui(app: &Application, path_arg: Option<&str>) {
     let theme_file = match jotter_theming::bundled::default_theme_file() {
@@ -174,16 +189,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         }
     };
 
-    // Chrome CSS lives on a display-level provider we keep so a toggle restyles it.
-    let chrome_provider = CssProvider::new();
-    apply_chrome_css(&chrome_provider, &theme);
-    if let Some(display) = gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &chrome_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    let chrome_provider = install_chrome_css(&theme);
 
     let editor = Editor::new(&theme);
     let preview = Preview::new(&theme);
@@ -273,6 +279,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .build();
     window.set_titlebar(Some(&header));
     wire_preview_zoom(&window, &state);
+    wire_save_on_close(&window, &state);
     window.present();
 
     state.editor.grab_focus();
@@ -379,6 +386,9 @@ fn first_note(state: &Rc<State>) -> Option<PathBuf> {
 /// Uses `set_initial_text` so the caret lands at the top of the freshly loaded
 /// note. Records it as current and as the vault's last-active note in config.
 fn load_note(state: &Rc<State>, rel: &Path) {
+    // The outgoing note is still `current`, so this writes the right file.
+    save_if_dirty(state);
+
     let text = {
         let session = state.session.borrow();
         let Some(session) = session.as_ref() else {
@@ -996,6 +1006,25 @@ fn rewrite_link_target(state: &Rc<State>, from: &str, chosen: &str) {
     state.editor.set_text(&out);
     state.editor.set_caret_line(caret);
     save_note(state);
+}
+
+/// Write out unsaved edits before the window closes, so quitting never drops work.
+fn wire_save_on_close(window: &ApplicationWindow, state: &Rc<State>) {
+    let close_state = Rc::clone(state);
+    window.connect_close_request(move |_| {
+        save_if_dirty(&close_state);
+        gtk::glib::Propagation::Proceed
+    });
+}
+
+/// Save the buffer if it has unsaved edits, and say nothing when it does not.
+///
+/// Used where saving is a side effect of something else (switching notes,
+/// closing the window) rather than something the user asked for directly.
+fn save_if_dirty(state: &Rc<State>) {
+    if state.dirty.get() {
+        save_note(state);
+    }
 }
 
 /// Install `Ctrl+S`, which writes the buffer to the file it came from.
