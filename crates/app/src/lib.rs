@@ -3,11 +3,13 @@
 //! edit-preview toggle loop, and (in vault mode) the file tree, background index,
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
+mod backlinks;
 mod commands;
 mod complete;
 mod config;
 mod links;
 mod picker;
+mod results;
 mod search;
 mod search_panel;
 mod switcher;
@@ -144,6 +146,8 @@ struct State {
     picker: RefCell<Option<picker::Handle>>,
     /// The `[[` completion popup, parented on the editor view.
     completion: complete::Popup,
+    /// The backlinks strip under the editor and preview.
+    backlinks: Rc<backlinks::Strip>,
     /// Sidebar pages: the file tree, and full-text search.
     sidebar_stack: Stack,
     /// The full-text search page.
@@ -268,6 +272,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
     let (search_panel, sidebar_stack, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
 
+    let backlinks = build_backlinks(&theme.chrome.accent, &opened);
+
     let config = Config::load();
     let startup = resolve_startup(path_arg, &config);
 
@@ -291,6 +297,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         app: app.clone(),
         picker: RefCell::new(None),
         completion,
+        backlinks: Rc::clone(&backlinks),
         sidebar_stack: sidebar_stack.clone(),
         search_panel,
         search_pending: RefCell::new(None),
@@ -305,10 +312,15 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
     wire_actions(app, &state);
 
+    // The strip sits under both editor and preview, so it shows in either mode.
+    let main_area = gtk::Box::new(Orientation::Vertical, 0);
+    main_area.append(&stack);
+    main_area.append(&backlinks.widget());
+
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
         .start_child(&sidebar_stack)
-        .end_child(&stack)
+        .end_child(&main_area)
         .resize_end_child(true)
         .shrink_start_child(false)
         .position(240)
@@ -321,8 +333,11 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     paned.set_vexpand(true);
     state.overlay.set_child(Some(&root_box));
 
-    let header = HeaderBar::new();
+    present_window(app, &state);
+}
 
+/// Builds the window around the already-assembled layout and shows it.
+fn present_window(app: &Application, state: &Rc<State>) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("jotter")
@@ -330,9 +345,9 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .default_height(900)
         .child(&state.overlay)
         .build();
-    window.set_titlebar(Some(&header));
-    wire_preview_zoom(&window, &state);
-    wire_save_on_close(&window, &state);
+    window.set_titlebar(Some(&HeaderBar::new()));
+    wire_preview_zoom(&window, state);
+    wire_save_on_close(&window, state);
     window.present();
 
     state.editor.grab_focus();
@@ -391,6 +406,7 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
     };
 
     let tree_model = build_tree(state, root);
+    restore_expanded(&tree_model, &state.config.borrow().expanded_folders_for(root));
 
     state.session.replace(Some(VaultSession {
         vault,
@@ -472,8 +488,44 @@ fn load_note(state: &Rc<State>, rel: &Path) {
         let mut config = state.config.borrow_mut();
         config.set_last_active(&root, rel);
         config.push_recent_note(&root, rel);
-        config.save();
     }
+    // Opening a note is the routine moment to write layout too, so a crash or a
+    // kill does not cost more than the folders opened since the last note switch.
+    remember_layout(state);
+    refresh_backlinks(state);
+}
+
+/// How many linking lines the strip shows per note.
+const MAX_BACKLINK_LINES: usize = 3;
+
+/// Refills the backlinks strip for the note now open.
+fn refresh_backlinks(state: &Rc<State>) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let Some(rel) = session.current.borrow().clone() else {
+        state.backlinks.set_hits(&[]);
+        return;
+    };
+    let target = vault_session::rel_to_key(&rel);
+    let linkers = session.index.linking_notes(&target).unwrap_or_default();
+
+    let resolver = session.resolver.borrow();
+    let resolve = |written: &str| resolver.lookup(written);
+    let hits: Vec<results::Hit> = linkers
+        .into_iter()
+        .filter_map(|note| {
+            let text = session.vault.read_note(Path::new(&note.path)).ok()?;
+            let snippets =
+                backlinks::linking_lines(&text, &target, &resolve, MAX_BACKLINK_LINES);
+            (!snippets.is_empty()).then_some(results::Hit {
+                path: note.path,
+                snippets,
+            })
+        })
+        .collect();
+    state.backlinks.set_hits(&hits);
 }
 
 /// The indexed title of a note, when it says more than the filename does.
@@ -714,6 +766,7 @@ fn refresh_links(state: &Rc<State>) {
     }
     // A note appearing or vanishing flips whether open links are broken.
     refresh_editor_links(state);
+    refresh_backlinks(state);
 }
 
 /// Refreshes the status bar note count from the index after a structural change,
@@ -902,6 +955,21 @@ fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Rc<search_panel::Panel
     (panel, stack, opened)
 }
 
+/// Builds the backlinks strip, opening notes through the state once it exists.
+fn build_backlinks(accent: &str, opened: &LateState) -> Rc<backlinks::Strip> {
+    let target = Rc::clone(opened);
+    backlinks::Strip::new(
+        accent,
+        Config::load().backlinks_expanded,
+        move |path, line| {
+            let state = target.borrow().clone();
+            if let Some(state) = state {
+                open_search_hit(&state, path, line);
+            }
+        },
+    )
+}
+
 /// Install Ctrl+Shift+F, and the panel behavior behind it.
 fn wire_search(app: &Application, state: &Rc<State>) {
     let action = gio::SimpleAction::new("search", None);
@@ -976,14 +1044,14 @@ fn run_search(state: &Rc<State>, query: &str) {
         .unwrap_or_default();
 
     // Snippets come from the file: notes_fts is contentless, so it has no text to quote.
-    let hits: Vec<search_panel::Hit> = notes
+    let hits: Vec<results::Hit> = notes
         .into_iter()
         .map(|note| {
             let text = session
                 .vault
                 .read_note(Path::new(&note.path))
                 .unwrap_or_default();
-            search_panel::Hit {
+            results::Hit {
                 snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
                 path: note.path,
             }
@@ -1260,6 +1328,7 @@ fn toggle_theme_mode(state: &Rc<State>) {
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
     state.search_panel.set_accent(&next.chrome.accent);
+    state.backlinks.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 
     // Swapping the provider CSS does not always invalidate the sidebar
@@ -1498,8 +1567,25 @@ fn wire_save_on_close(window: &ApplicationWindow, state: &Rc<State>) {
     let close_state = Rc::clone(state);
     window.connect_close_request(move |_| {
         save_if_dirty(&close_state);
+        remember_layout(&close_state);
         gtk::glib::Propagation::Proceed
     });
+}
+
+/// Persists what the window looked like: the strip, and which folders are open.
+fn remember_layout(state: &Rc<State>) {
+    let expanded = state.session.borrow().as_ref().map(|session| {
+        (
+            session.vault.root().to_path_buf(),
+            expanded_paths(&session.tree_model.borrow()),
+        )
+    });
+    let mut config = state.config.borrow_mut();
+    config.backlinks_expanded = state.backlinks.is_expanded();
+    if let Some((root, folders)) = expanded {
+        config.set_expanded_folders(&root, &folders);
+    }
+    config.save();
 }
 
 /// Save the buffer if it has unsaved edits, and say nothing when it does not.
@@ -1543,6 +1629,7 @@ fn save_note(state: &Rc<State>) {
             state.dirty.set(false);
             state.status.set_text(&format!("Saved {name}"));
             refresh_titles(state);
+            refresh_backlinks(state);
         }
         None => state.status.set_text("Nothing to save"),
     }

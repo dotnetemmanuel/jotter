@@ -174,6 +174,25 @@ popover > contents {
   background-color: alpha(#f6e8cd, 0.45);
 }
 
+.backlinks {
+  background-color: #f6e8cd;
+}
+
+.backlinks-header {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #5f7d84;
+  font-size: 14px;
+  padding: 3px 10px;
+  min-height: 0;
+}
+
+.backlinks-header:hover {
+  background: none;
+  color: #24404f;
+}
+
 .search-results {
   background-color: transparent;
   color: #24404f;

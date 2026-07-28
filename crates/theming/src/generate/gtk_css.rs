@@ -47,6 +47,9 @@ entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: non
 row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.backlinks {{\n  background-color: {bg};\n}}\n\n\
+.backlinks-header {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-size: {small}px;\n  padding: 3px 10px;\n  min-height: 0;\n}}\n\n\
+.backlinks-header:hover {{\n  background: none;\n  color: {text};\n}}\n\n\
 .search-results {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
 .search-results > row {{\n  border-radius: {r}px;\n  padding: 1px 6px;\n  margin: 0 6px;\n}}\n\n\
 .search-results > row:hover {{\n  background-color: {overlay};\n}}\n\n\

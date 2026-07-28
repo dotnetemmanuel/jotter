@@ -1,7 +1,7 @@
 //! Global config at `~/.config/jotter/config.toml`: recent vaults and per-vault
 //! last-active note. IO failures are non-fatal (logged to stderr, defaults used).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,12 @@ pub struct Config {
     /// Recently opened notes, most-recent-first, keyed by absolute vault root.
     #[serde(default)]
     pub recent_notes: BTreeMap<String, Vec<String>>,
+    /// Whether the backlinks strip under the editor is open.
+    #[serde(default)]
+    pub backlinks_expanded: bool,
+    /// Open tree folders (vault-relative), keyed by absolute vault root.
+    #[serde(default)]
+    pub expanded_folders: BTreeMap<String, Vec<String>>,
 }
 
 impl Config {
@@ -99,6 +105,25 @@ impl Config {
         self.last_active.get(key.as_ref()).map(PathBuf::from)
     }
 
+    /// Records which folders of `root` are open in the tree.
+    pub fn set_expanded_folders(&mut self, root: &Path, folders: &HashSet<String>) {
+        let key = root.to_string_lossy().into_owned();
+        // Sorted so the file does not churn between runs that opened the same folders.
+        let mut folders: Vec<String> = folders.iter().cloned().collect();
+        folders.sort();
+        self.expanded_folders.insert(key, folders);
+    }
+
+    /// Folders of `root` that were open when it was last closed.
+    #[must_use]
+    pub fn expanded_folders_for(&self, root: &Path) -> HashSet<String> {
+        let key = root.to_string_lossy();
+        self.expanded_folders
+            .get(key.as_ref())
+            .map(|folders| folders.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Records `rel` as the most recently opened note of vault `root`.
     pub fn push_recent_note(&mut self, root: &Path, rel: &Path) {
         let key = root.to_string_lossy().into_owned();
@@ -146,6 +171,7 @@ fn capped(existing: Vec<String>, key: String, cap: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{Config, MAX_RECENTS, MAX_RECENT_NOTES, push_recent};
+    use std::collections::HashSet;
     use std::path::Path;
 
     #[test]
@@ -184,6 +210,33 @@ mod tests {
         config.push_recent_note(Path::new("/two"), Path::new("b.md"));
         assert_eq!(config.recent_notes_for(Path::new("/one")), ["a.md"]);
         assert_eq!(config.recent_notes_for(Path::new("/two")), ["b.md"]);
+    }
+
+    #[test]
+    fn expanded_folders_round_trip_per_vault() {
+        let mut config = Config::default();
+        let folders: HashSet<String> = ["notes".to_string(), "archive/old".to_string()]
+            .into_iter()
+            .collect();
+        config.set_expanded_folders(Path::new("/one"), &folders);
+        assert_eq!(config.expanded_folders_for(Path::new("/one")), folders);
+        assert!(config.expanded_folders_for(Path::new("/two")).is_empty());
+    }
+
+    #[test]
+    fn expanded_folders_are_stored_sorted() {
+        let mut config = Config::default();
+        let folders: HashSet<String> = ["z".to_string(), "a".to_string()].into_iter().collect();
+        config.set_expanded_folders(Path::new("/v"), &folders);
+        assert_eq!(config.expanded_folders["/v"], ["a", "z"]);
+    }
+
+    #[test]
+    fn closing_every_folder_is_remembered() {
+        let mut config = Config::default();
+        config.set_expanded_folders(Path::new("/v"), &HashSet::from(["notes".to_string()]));
+        config.set_expanded_folders(Path::new("/v"), &HashSet::new());
+        assert!(config.expanded_folders_for(Path::new("/v")).is_empty());
     }
 
     #[test]
