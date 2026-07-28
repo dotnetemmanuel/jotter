@@ -58,6 +58,65 @@ pub fn scan_inert(src: &str) -> Vec<Range<usize>> {
     scan_all(src).1
 }
 
+/// Byte ranges where a `[[` means nothing: code blocks, frontmatter, raw HTML,
+/// and inline code spans.
+///
+/// Unlike [`scan`], this needs no closing `]]`, so a half-typed link can be
+/// tested against it. An unclosed backtick run counts to the end of its line:
+/// mid-typing, the safe reading is that it is code.
+#[must_use]
+pub fn dead_ranges(src: &str) -> Vec<Range<usize>> {
+    let mut ranges = opaque_ranges(src);
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(end) = ranges.iter().find(|r| r.contains(&i)).map(|r| r.end) {
+            i = end;
+            continue;
+        }
+        if bytes[i] == b'`' {
+            let closed = skip_inline_code(bytes, i);
+            let end = if closed == i + run_length(bytes, i) && !closes_run(bytes, i) {
+                line_end(bytes, i)
+            } else {
+                closed
+            };
+            ranges.push(i..end);
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    ranges.sort_by_key(|range| range.start);
+    ranges
+}
+
+/// Whether the backtick run at `start` has a matching closing run.
+fn closes_run(bytes: &[u8], start: usize) -> bool {
+    let open_len = run_length(bytes, start);
+    let mut i = start + open_len;
+    while i < bytes.len() {
+        if bytes[i] == b'`' {
+            let len = run_length(bytes, i);
+            if len == open_len {
+                return true;
+            }
+            i += len;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
+/// Offset just past the end of the line containing `from`.
+fn line_end(bytes: &[u8], from: usize) -> usize {
+    bytes[from..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(bytes.len(), |offset| from + offset)
+}
+
 /// One pass returning both the links and the lookalikes that are not links.
 fn scan_all(src: &str) -> (Vec<Wikilink>, Vec<Range<usize>>) {
     let skip = opaque_ranges(src);

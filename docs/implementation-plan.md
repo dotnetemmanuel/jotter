@@ -8,9 +8,9 @@ This document is the execution guide. Work top to bottom. Do not start a phase
 until the previous phase meets its acceptance criteria. Ship phases 0 through 5
 before touching any v1.5 feature.
 
-## Status (2026-07-27)
+## Status (2026-07-28)
 
-Phases 0 through 3a are complete. Next up is Phase 3b (search and the pickers).
+Phases 0 through 3 are complete. Next up is Phase 4 (backlinks, tags, frontmatter).
 Phase 3 was split: wikilinks landed first because they carry the correctness risk
 and are testable without a GUI, and the pickers share a widget with search.
 
@@ -265,28 +265,32 @@ Shipped:
   match the note is created beside its source and opened. External links now go to
   the system browser instead of navigating the preview away from the note.
 
-## Phase 3b: search and pickers (target: 4 to 5 days)
+## Phase 3b: search and pickers (done)
 
 Goal: finding notes.
 
-Tasks:
-- `[[` opens an autocomplete popover fed from the index (titles and paths).
-- Quick switcher (`Ctrl+O`): fuzzy over note title and path.
-- Command palette (`Ctrl+P`): fuzzy over commands and notes together.
-- Full-text search (`Ctrl+Shift+F`): FTS5-backed, side panel, snippet highlights.
-  `notes_fts` is already populated on every upsert; the work here is querying it,
-  ranking, and rendering snippets, plus progress on a first large-vault build.
-- One shared fuzzy list widget behind all three surfaces, with a real subsequence
-  matcher (the wikilink near-match check is edit distance, a different job).
+Shipped:
+- `crates/search`: a pure subsequence matcher returning a score and the matched
+  byte positions. Scoring rewards word starts, adjacent runs, and the filename
+  over the folder, with candidate length as the tiebreak. Smart case throughout.
+- `crates/app/src/picker.rs`: one overlay widget (entry plus list) that knows
+  nothing about what it lists. `Ctrl+O` fills it with notes ranked over path and
+  title, `Ctrl+P` opens the same overlay with `>` typed, which switches it to
+  commands; the leading `>` flips modes live and each key toggles it shut. The
+  empty note list shows the last ten notes opened in this vault, kept in config.
+- `crates/app/src/complete.rs`: `[[` completion in a caret popover. It inserts
+  the shortest target that reaches the note (bare stem when unique, path when
+  not), which is exactly what 3a resolution expects.
+- `crates/app/src/search_panel.rs` plus `search.rs`: `Ctrl+Shift+F` swaps the
+  sidebar to full-text search. Query building is a pure function; ranking is
+  bm25 through the new `Index::search_notes`.
 
-Acceptance:
-- Typing `[[` autocompletes from the index.
-- Quick switcher, command palette, and FTS search all return correct results on a
-  multi-hundred-note fixture vault.
-- Commit: "phase 3b: autocomplete, quick switcher, command palette, FTS".
-
-Pitfall guard: never rewrite wikilinks inside code fences or inline code. Preprocess
-with code-context awareness, not a blind document-wide regex.
+Two things worth remembering:
+- `notes_fts` is contentless, so `snippet()` and `highlight()` do not work.
+  Snippets come from reading the matched files, which also yields line numbers,
+  so a result opens the note at the line that matched.
+- `scan_inert` reports finished lookalike spans, not regions, so it cannot answer
+  "is this half-typed `[[` inside code". `wikilink::dead_ranges` does that.
 
 Saving landed alongside phase 3a (it was missing entirely: `vault.write_note` had
 no caller). `Ctrl+S` writes through the vault and reindexes, or writes the file

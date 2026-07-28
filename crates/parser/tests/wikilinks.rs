@@ -50,3 +50,45 @@ fn heading_lines_are_unaffected_by_rewriting() {
     assert_eq!(rendered.headings[0].source_line, 1);
     assert_eq!(rendered.headings[1].source_line, 5);
 }
+
+#[test]
+fn dead_ranges_cover_a_fenced_code_block() {
+    let src = "text\n\n```\n[[plan\n```\n";
+    let dead = jotter_parser::wikilink::dead_ranges(src);
+    let open = src.find("[[").expect("bracket");
+    assert!(dead.iter().any(|range| range.contains(&open)));
+}
+
+#[test]
+fn dead_ranges_cover_frontmatter() {
+    let src = "---\ntitle: Old notes\n[[plan\n---\n\nbody\n";
+    let dead = jotter_parser::wikilink::dead_ranges(src);
+    let open = src.find("[[").expect("bracket");
+    assert!(dead.iter().any(|range| range.contains(&open)));
+}
+
+#[test]
+fn dead_ranges_cover_an_inline_code_span() {
+    let src = "see `[[plan` here";
+    let dead = jotter_parser::wikilink::dead_ranges(src);
+    let open = src.find("[[").expect("bracket");
+    assert!(dead.iter().any(|range| range.contains(&open)));
+}
+
+#[test]
+fn dead_ranges_cover_an_unclosed_inline_run_to_end_of_line() {
+    let src = "see `[[pl\nnext line";
+    let dead = jotter_parser::wikilink::dead_ranges(src);
+    let open = src.find("[[").expect("bracket");
+    let next = src.find("next").expect("second line");
+    assert!(dead.iter().any(|range| range.contains(&open)));
+    assert!(!dead.iter().any(|range| range.contains(&next)));
+}
+
+#[test]
+fn dead_ranges_leave_ordinary_prose_alone() {
+    let src = "just [[plan]] in prose";
+    let open = src.find("[[").expect("bracket");
+    let dead = jotter_parser::wikilink::dead_ranges(src);
+    assert!(!dead.iter().any(|range| range.contains(&open)));
+}

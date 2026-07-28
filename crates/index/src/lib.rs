@@ -415,6 +415,36 @@ impl Index {
         Ok(ids)
     }
 
+    /// Full-text search returning whole notes, best match first, capped at `limit`.
+    ///
+    /// Ranking is `FTS5` bm25. As with [`Index::search`], invalid query syntax
+    /// yields no matches rather than an error.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] only for failures unrelated to query syntax.
+    pub fn search_notes(&self, query: &str, limit: usize) -> Result<Vec<Note>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.id, n.path, n.title, n.mtime, n.size, n.frontmatter
+             FROM notes_fts f JOIN notes n ON n.id = f.rowid
+             WHERE notes_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = match stmt.query_map(params![query, limit], Self::map_note) {
+            Ok(rows) => rows,
+            Err(err) if is_fts_syntax_error(&err) => return Ok(Vec::new()),
+            Err(err) => return Err(err.into()),
+        };
+        let mut notes = Vec::new();
+        for note in rows {
+            match note {
+                Ok(note) => notes.push(note),
+                Err(err) if is_fts_syntax_error(&err) => return Ok(Vec::new()),
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(notes)
+    }
+
     /// Returns the tags for a note, ordered.
     ///
     /// # Errors
@@ -766,6 +796,40 @@ mod tests {
         assert!(index.remove_note_by_path("a.md").unwrap());
         assert!(index.search("brown").unwrap().is_empty());
         assert!(index.search("Rustacean").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_notes_returns_matches_ranked() {
+        let index = Index::open_in_memory().unwrap();
+        index.upsert_note(&note("a.md", "Alpha", "webkit rendering notes")).unwrap();
+        index.upsert_note(&note("b.md", "Beta", "nothing to see")).unwrap();
+        let found = index.search_notes("webkit", 10).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "a.md");
+        assert_eq!(found[0].title, "Alpha");
+    }
+
+    #[test]
+    fn search_notes_respects_the_limit() {
+        let index = Index::open_in_memory().unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            index.upsert_note(&note(name, name, "shared webkit body")).unwrap();
+        }
+        assert_eq!(index.search_notes("webkit", 2).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn search_notes_matches_the_title_too() {
+        let index = Index::open_in_memory().unwrap();
+        index.upsert_note(&note("a.md", "Webkit rendering", "unrelated body")).unwrap();
+        assert_eq!(index.search_notes("webkit", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_notes_survives_invalid_query() {
+        let index = Index::open_in_memory().unwrap();
+        index.upsert_note(&note("a.md", "Alpha", "body")).unwrap();
+        assert!(index.search_notes("\"unclosed", 10).unwrap().is_empty());
     }
 
     #[test]

@@ -1,0 +1,6 @@
+[package]
+name = "jotter-search"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

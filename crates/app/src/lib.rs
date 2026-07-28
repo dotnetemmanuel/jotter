@@ -3,8 +3,14 @@
 //! edit-preview toggle loop, and (in vault mode) the file tree, background index,
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
+mod commands;
+mod complete;
 mod config;
 mod links;
+mod picker;
+mod search;
+mod search_panel;
+mod switcher;
 mod title;
 mod tree;
 mod vault_session;
@@ -43,6 +49,17 @@ const PAGE_EDIT: &str = "edit";
 /// Stack page name for the preview.
 const PAGE_PREVIEW: &str = "preview";
 
+/// Sidebar page names: the file tree, and the search panel.
+const PAGE_TREE: &str = "tree";
+const PAGE_SEARCH: &str = "search";
+
+/// Debounce before a typed query hits the index, in milliseconds.
+const SEARCH_DEBOUNCE_MS: u64 = 120;
+
+/// How many notes a search returns, and how many lines are shown per note.
+const MAX_SEARCH_NOTES: usize = 50;
+const MAX_SEARCH_LINES: usize = 3;
+
 /// Re-render debounce for an already-open preview, in milliseconds.
 const DEBOUNCE_MS: u64 = 150;
 
@@ -51,6 +68,21 @@ const DRAIN_MS: u64 = 200;
 
 /// How many near matches to offer when a wikilink target does not exist.
 const MAX_SUGGESTIONS: usize = 5;
+
+/// How many rows the picker shows at most, however many notes matched.
+const MAX_PICKER_ROWS: usize = 50;
+
+/// How many suggestions the `[[` completion popup offers.
+const MAX_COMPLETION_ROWS: usize = 8;
+
+/// Actions the command palette offers, in the order it lists them.
+const PALETTE_COMMANDS: [(&str, &str); 5] = [
+    ("quick-open", "Go to note"),
+    ("save", "Save note"),
+    ("toggle-mode", "Toggle edit and preview"),
+    ("toggle-theme", "Toggle light and dark theme"),
+    ("toggle-sidebar", "Toggle sidebar"),
+];
 
 /// Fallback document shown when no path is given or a read fails.
 const SAMPLE_MARKDOWN: &str = "# jotter\n\nA native GTK4 markdown vault.\n\n## Toggle\n\nPress Ctrl+E to switch between edit and preview.\n\n## Code\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
@@ -102,6 +134,20 @@ struct State {
     dirty: Cell<bool>,
     /// Path open in single-file mode, absent in vault mode and for the sample.
     single_file: RefCell<Option<PathBuf>>,
+    /// Layer the picker panel is added to, above the editor and preview.
+    overlay: gtk::Overlay,
+    /// The application, for activating an action the command palette chose.
+    app: Application,
+    /// The picker while it is open, so its key can toggle it shut again.
+    picker: RefCell<Option<picker::Handle>>,
+    /// The `[[` completion popup, parented on the editor view.
+    completion: complete::Popup,
+    /// Sidebar pages: the file tree, and full-text search.
+    sidebar_stack: Stack,
+    /// The full-text search page.
+    search_panel: Rc<search_panel::Panel>,
+    /// Pending debounced search, replaced on each keystroke.
+    search_pending: RefCell<Option<SourceId>>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -192,6 +238,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     let chrome_provider = install_chrome_css(&theme);
 
     let editor = Editor::new(&theme);
+    let completion = complete::Popup::new(&editor.text_view());
     let preview = Preview::new(&theme);
 
     let stack = Stack::new();
@@ -207,8 +254,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .width_request(240)
         .hscrollbar_policy(gtk::PolicyType::Automatic)
         .build();
-    // The theme stylesheet targets `.sidebar` for the surface color and tree rows.
-    sidebar.add_css_class("sidebar");
+    // The stack carries `.sidebar`, so styling it here would draw a second border.
 
     let status = Label::builder()
         .halign(gtk::Align::Start)
@@ -217,6 +263,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .margin_top(2)
         .margin_bottom(2)
         .build();
+
+    let (search_panel, sidebar_stack, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
 
     let config = Config::load();
     let startup = resolve_startup(path_arg, &config);
@@ -237,7 +285,15 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         pending_anchor: RefCell::new(None),
         dirty: Cell::new(false),
         single_file: RefCell::new(None),
+        overlay: gtk::Overlay::new(),
+        app: app.clone(),
+        picker: RefCell::new(None),
+        completion,
+        sidebar_stack: sidebar_stack.clone(),
+        search_panel,
+        search_pending: RefCell::new(None),
     });
+    opened.replace(Some(Rc::clone(&state)));
 
     // Load content per the resolved startup target, opening a vault if requested.
     match startup {
@@ -245,17 +301,11 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         Startup::File(path) => open_single_file(&state, path.as_deref()),
     }
 
-    wire_toggle(app, &state);
-    wire_theme_toggle(app, &state);
-    wire_sidebar_toggle(app, &state);
-    wire_debounce(&state);
-    wire_preview_links(&state);
-    wire_editor_links(&state);
-    wire_save(app, &state);
+    wire_actions(app, &state);
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
-        .start_child(&sidebar)
+        .start_child(&sidebar_stack)
         .end_child(&stack)
         .resize_end_child(true)
         .shrink_start_child(false)
@@ -267,6 +317,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     root_box.append(&gtk::Separator::new(Orientation::Horizontal));
     root_box.append(&status);
     paned.set_vexpand(true);
+    state.overlay.set_child(Some(&root_box));
 
     let header = HeaderBar::new();
 
@@ -275,7 +326,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .title("jotter")
         .default_width(1400)
         .default_height(900)
-        .child(&root_box)
+        .child(&state.overlay)
         .build();
     window.set_titlebar(Some(&header));
     wire_preview_zoom(&window, &state);
@@ -417,6 +468,7 @@ fn load_note(state: &Rc<State>, rel: &Path) {
         let root = session.vault.root().to_path_buf();
         let mut config = state.config.borrow_mut();
         config.set_last_active(&root, rel);
+        config.push_recent_note(&root, rel);
         config.save();
     }
 }
@@ -736,13 +788,369 @@ fn toggle_mode(state: &Rc<State>) {
     }
 }
 
+/// Install every accelerator, signal, and controller the window needs.
+fn wire_actions(app: &Application, state: &Rc<State>) {
+    wire_toggle(app, state);
+    wire_theme_toggle(app, state);
+    wire_sidebar_toggle(app, state);
+    wire_debounce(state);
+    wire_preview_links(state);
+    wire_editor_links(state);
+    wire_save(app, state);
+    wire_quick_open(app, state);
+    wire_command_palette(app, state);
+    wire_completion(state);
+    wire_search(app, state);
+}
+
+/// The state a search row activates through, filled in once the state exists.
+type LateState = Rc<RefCell<Option<Rc<State>>>>;
+
+/// Builds the two-page sidebar and the cell its rows activate through.
+fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Rc<search_panel::Panel>, Stack, LateState) {
+    let opened: LateState = Rc::new(RefCell::new(None));
+    let target = Rc::clone(&opened);
+    let panel = search_panel::Panel::new(accent, move |path, line| {
+        let state = target.borrow().clone();
+        if let Some(state) = state {
+            open_search_hit(&state, path, line);
+        }
+    });
+
+    let stack = Stack::new();
+    stack.add_named(tree, Some(PAGE_TREE));
+    stack.add_named(&panel.widget(), Some(PAGE_SEARCH));
+    stack.set_visible_child_name(PAGE_TREE);
+    stack.add_css_class("sidebar");
+
+    (panel, stack, opened)
+}
+
+/// Install Ctrl+Shift+F, and the panel behavior behind it.
+fn wire_search(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("search", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| show_search(&open_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.search", &["<Primary><Shift>f"]);
+
+    let typing = Rc::clone(state);
+    state.search_panel.connect_query(move |query| {
+        if let Some(pending) = typing.search_pending.borrow_mut().take() {
+            pending.remove();
+        }
+        let query = query.to_string();
+        let fire = Rc::clone(&typing);
+        let source = gtk::glib::timeout_add_local_once(
+            Duration::from_millis(SEARCH_DEBOUNCE_MS),
+            move || {
+                fire.search_pending.replace(None);
+                run_search(&fire, &query);
+            },
+        );
+        typing.search_pending.replace(Some(source));
+    });
+
+    let escaping = Rc::clone(state);
+    state.search_panel.connect_escape(move || close_search(&escaping));
+}
+
+/// Reveals the search page and puts the caret in its entry.
+///
+/// Pressing the key again from the search box closes it; pressing it from the
+/// editor pulls focus back to the query instead, which is the more useful move
+/// when the results are still on screen.
+fn show_search(state: &Rc<State>) {
+    if state.session.borrow().is_none() {
+        return;
+    }
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_SEARCH);
+    if showing && state.search_panel.has_focus() {
+        close_search(state);
+        return;
+    }
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_SEARCH);
+    state.search_panel.focus();
+}
+
+/// Puts the file tree back and returns focus to the editor.
+fn close_search(state: &Rc<State>) {
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Runs `query` against the index and fills the panel with matching lines.
+fn run_search(state: &Rc<State>, query: &str) {
+    let fts = search::fts_query(query);
+    if fts.is_empty() {
+        state.search_panel.set_hits(&[], false);
+        return;
+    }
+    let terms = search::terms(query);
+
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let notes = session
+        .index
+        .search_notes(&fts, MAX_SEARCH_NOTES)
+        .unwrap_or_default();
+
+    // Snippets come from the file: notes_fts is contentless, so it has no text to quote.
+    let hits: Vec<search_panel::Hit> = notes
+        .into_iter()
+        .map(|note| {
+            let text = session
+                .vault
+                .read_note(Path::new(&note.path))
+                .unwrap_or_default();
+            search_panel::Hit {
+                snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
+                path: note.path,
+            }
+        })
+        .collect();
+    state.search_panel.set_hits(&hits, true);
+}
+
+/// Opens a search result, putting the caret on the line that matched.
+fn open_search_hit(state: &Rc<State>, path: &str, line: i32) {
+    let rel = PathBuf::from(path);
+    load_note(state, &rel);
+    select_in_tree(state, &rel);
+    state.stack.set_visible_child_name(PAGE_EDIT);
+    state.editor.focus_line(line);
+    state.editor.grab_focus();
+}
+
+/// Offer note targets while the caret sits inside an unclosed `[[`.
+fn wire_completion(state: &Rc<State>) {
+    let moved = Rc::clone(state);
+    state
+        .editor
+        .connect_caret_moved(move || refresh_completion(&moved));
+
+    let keys = Rc::clone(state);
+    state.editor.connect_key_capture(move |key| {
+        if !keys.completion.is_open() {
+            return false;
+        }
+        match key {
+            gdk::Key::Down => keys.completion.step(1),
+            gdk::Key::Up => keys.completion.step(-1),
+            gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::Tab => accept_completion(&keys),
+            gdk::Key::Escape => keys.completion.hide(),
+            _ => return false,
+        }
+        true
+    });
+}
+
+/// Re-decide whether the completion popup belongs on screen, and with what.
+fn refresh_completion(state: &Rc<State>) {
+    let text = state.editor.text();
+    let caret = state.editor.caret_byte();
+
+    // Cheap check first: parsing for code ranges is only worth it inside a link.
+    let Some(context) = complete::context(&text, caret, &[]) else {
+        state.completion.hide();
+        return;
+    };
+    let dead = jotter_parser::wikilink::dead_ranges(&text);
+    if complete::context(&text, caret, &dead).is_none() {
+        state.completion.hide();
+        return;
+    }
+
+    let targets = completion_targets(state);
+    let rows = complete::rows(&context.query, &targets, MAX_COMPLETION_ROWS);
+    state.completion.show(state.editor.caret_rect(), &rows);
+}
+
+/// Writes the selected target into the link the caret is in.
+fn accept_completion(state: &Rc<State>) {
+    let Some(target) = state.completion.selected() else {
+        return;
+    };
+    let text = state.editor.text();
+    let caret = state.editor.caret_byte();
+    let Some(context) = complete::context(&text, caret, &[]) else {
+        return;
+    };
+    let (replacement, offset) = complete::insertion(&target, context.closed);
+    state.completion.hide();
+    state.editor.replace_range(context.range, &replacement, offset);
+}
+
+/// Every note as the shortest link target that reaches it.
+fn completion_targets(state: &Rc<State>) -> Vec<String> {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return Vec::new();
+    };
+    let resolver = session.resolver.borrow();
+    session
+        .index
+        .all_notes()
+        .unwrap_or_default()
+        .iter()
+        .map(|note| resolver.shortest_target(&note.path))
+        .collect()
+}
+
+/// Install a Ctrl+O accelerator that opens the picker on notes.
+fn wire_quick_open(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("quick-open", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| open_picker(&open_state, ""));
+    app.add_action(&action);
+    app.set_accels_for_action("app.quick-open", &["<Primary>o"]);
+}
+
+/// Install a Ctrl+P accelerator that opens the picker already in command mode.
+fn wire_command_palette(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("command-palette", None);
+    let open_state = Rc::clone(state);
+    let prefix = commands::PREFIX.to_string();
+    action.connect_activate(move |_, _| open_picker(&open_state, &prefix));
+    app.add_action(&action);
+    app.set_accels_for_action("app.command-palette", &["<Primary>p"]);
+}
+
+/// Opens the picker: notes by default, commands while the query starts with `>`.
+///
+/// Recents fill the empty note list; the whole command list fills the empty
+/// command one.
+fn open_picker(state: &Rc<State>, initial_query: &str) {
+    // Its own key toggles the picker shut; the other key switches mode instead.
+    let open = state.picker.borrow().clone();
+    if let Some(handle) = open {
+        if commands::same_mode(&handle.query(), initial_query) {
+            handle.close();
+        } else {
+            handle.set_query(initial_query);
+        }
+        return;
+    }
+
+    let notes = switcher_candidates(state).unwrap_or_default();
+    let recents = recent_notes(state);
+    let command_list = command_list(&state.app);
+
+    // Set by the source on every keystroke so activation knows which list it chose from.
+    let in_command_mode = Rc::new(Cell::new(false));
+
+    let source_mode = Rc::clone(&in_command_mode);
+    let activate = Rc::clone(state);
+    let restore = Rc::clone(state);
+    let handle = picker::open(
+        &state.overlay,
+        "Go to note, or > for commands",
+        initial_query,
+        move |query| {
+            if let Some(rest) = commands::command_query(query) {
+                source_mode.set(true);
+                return commands::rows(rest, &command_list, MAX_PICKER_ROWS);
+            }
+            source_mode.set(false);
+            switcher::rows(query, &notes, &recents, MAX_PICKER_ROWS)
+        },
+        move |key| {
+            if in_command_mode.get() {
+                activate.app.activate_action(key, None);
+                return;
+            }
+            let rel = PathBuf::from(key);
+            load_note(&activate, &rel);
+            select_in_tree(&activate, &rel);
+        },
+        move || {
+            restore.picker.replace(None);
+            restore.editor.grab_focus();
+        },
+    );
+    state.picker.replace(Some(handle));
+}
+
+/// Every command the palette offers, labelled with its current accelerator.
+fn command_list(app: &Application) -> Vec<commands::Command> {
+    PALETTE_COMMANDS
+        .iter()
+        .map(|(action, title)| commands::Command {
+            action: (*action).to_string(),
+            title: (*title).to_string(),
+            accel: accel_label(app, action),
+        })
+        .collect()
+}
+
+/// The first accelerator bound to `action`, as a display label like `Ctrl+S`.
+fn accel_label(app: &Application, action: &str) -> String {
+    let accels = app.accels_for_action(&format!("app.{action}"));
+    let Some(first) = accels.first() else {
+        return String::new();
+    };
+    let Some((key, mods)) = gtk::accelerator_parse(first) else {
+        return String::new();
+    };
+    gtk::accelerator_get_label(key, mods).to_string()
+}
+
+/// Every note the switcher can offer, from the index, falling back to the vault
+/// while a first index build is still running.
+fn switcher_candidates(state: &Rc<State>) -> Option<Vec<switcher::Candidate>> {
+    let session = state.session.borrow();
+    let session = session.as_ref()?;
+    let indexed: Vec<switcher::Candidate> = session
+        .index
+        .all_notes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|note| switcher::Candidate {
+            path: note.path,
+            title: note.title,
+        })
+        .collect();
+    if !indexed.is_empty() {
+        return Some(indexed);
+    }
+    Some(
+        session
+            .vault
+            .notes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|note| switcher::Candidate {
+                title: stem_of(&note.rel_path),
+                path: note.rel_path.to_string_lossy().into_owned(),
+            })
+            .collect(),
+    )
+}
+
+/// Recently opened notes of the active vault, most-recent-first.
+fn recent_notes(state: &Rc<State>) -> Vec<String> {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return Vec::new();
+    };
+    state
+        .config
+        .borrow()
+        .recent_notes_for(session.vault.root())
+        .to_vec()
+}
+
 /// Install a Ctrl+B accelerator that toggles the sidebar visibility.
 fn wire_sidebar_toggle(app: &Application, state: &Rc<State>) {
     let action = gio::SimpleAction::new("toggle-sidebar", None);
     let sidebar_state = Rc::clone(state);
     action.connect_activate(move |_, _| {
-        let visible = sidebar_state.sidebar.get_visible();
-        sidebar_state.sidebar.set_visible(!visible);
+        let visible = sidebar_state.sidebar_stack.get_visible();
+        sidebar_state.sidebar_stack.set_visible(!visible);
     });
     app.add_action(&action);
     app.set_accels_for_action("app.toggle-sidebar", &["<Primary>b"]);
@@ -775,6 +1183,7 @@ fn toggle_theme_mode(state: &Rc<State>) {
     apply_chrome_css(&state.chrome_provider, &next);
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
+    state.search_panel.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 
     // Swapping the provider CSS does not always invalidate the sidebar

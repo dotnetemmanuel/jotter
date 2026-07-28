@@ -1,31 +1,45 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 34
 expression: "resolve(\"retro82\", Mode::Light).to_gtk_css()"
 ---
 /* retro82 light */
 window {
   background-color: #f6e8cd;
-  color: #0a2138;
+  color: #24404f;
   font-family: Inter, sans-serif;
   font-size: 15px;
 }
 
 headerbar {
-  background-color: #ecdcb8;
+  background-color: #f6e8cd;
   background-image: none;
-  color: #0a2138;
-  border-bottom: 2px solid #0a2138;
+  color: #24404f;
+  border-bottom: 1px solid #d8c49a;
   box-shadow: none;
 }
 
+separator {
+  background-color: #d8c49a;
+  min-height: 1px;
+  min-width: 1px;
+}
+
+paned > separator {
+  background-color: #d8c49a;
+  background-image: none;
+  min-width: 1px;
+  min-height: 1px;
+}
+
 .sidebar {
-  background-color: #ecdcb8;
-  border-right: 2px solid #0a2138;
+  background-color: #f6e8cd;
 }
 
 .sidebar listview {
   background-color: transparent;
-  color: #0a2138;
+  color: #24404f;
+  padding-top: 6px;
 }
 
 .sidebar listview > row {
@@ -51,7 +65,7 @@ headerbar {
 button {
   background-color: #ecdcb8;
   background-image: none;
-  color: #0a2138;
+  color: #24404f;
   border: 2px solid #0a2138;
   border-radius: 3px;
   box-shadow: none;
@@ -63,10 +77,10 @@ button:hover {
 }
 
 button.suggested-action {
-  background-color: #0a2138;
+  background-color: #24404f;
   background-image: none;
   color: #f6e8cd;
-  border-color: #0a2138;
+  border-color: #24404f;
 }
 
 button.suggested-action:hover {
@@ -91,13 +105,13 @@ windowcontrols button, windowcontrols button.titlebutton {
   background-image: none;
   border: none;
   box-shadow: none;
-  color: #0a2138;
+  color: #24404f;
 }
 
 windowcontrols button:hover, windowcontrols button.titlebutton:hover {
   background-color: #d8c49a;
   background-image: none;
-  color: #0a2138;
+  color: #24404f;
   border-radius: 3px;
 }
 
@@ -106,35 +120,162 @@ windowcontrols button image, windowcontrols button:hover image {
   background-color: transparent;
   background-image: none;
   box-shadow: none;
-  color: #0a2138;
+  color: #24404f;
 }
 
 entry {
   background-color: transparent;
   background-image: none;
-  color: #0a2138;
+  color: #24404f;
   border: none;
   border-bottom: 2px solid #0a2138;
   border-radius: 0;
   box-shadow: none;
+  outline: none;
   padding: 6px 2px;
+}
+
+entry:focus-within, entry:hover, entry:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 entry:focus-within {
   border-bottom-color: #d9762b;
 }
 
+entry > text, entry > text:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {
+  outline: none;
+}
+
 popover > contents {
   background-color: #ecdcb8;
-  color: #0a2138;
+  color: #24404f;
   border: 2px solid #0a2138;
   border-radius: 3px;
   box-shadow: none;
 }
 
+.picker-scrim {
+  background-color: alpha(#f6e8cd, 0.45);
+}
+
+.search-results {
+  background-color: transparent;
+  color: #24404f;
+}
+
+.search-results > row {
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin: 0 6px;
+}
+
+.search-results > row:hover {
+  background-color: #d8c49a;
+}
+
+.search-results > row:selected {
+  background-color: #d8c49a;
+  color: #24404f;
+  box-shadow: inset 2px 0 0 0 #d9762b;
+}
+
+.search-heading {
+  margin-top: 14px;
+  padding: 2px 2px 4px 2px;
+  border-bottom: 1px solid alpha(#0a2138, 0.25);
+}
+
+.search-results > row:first-child .search-heading {
+  margin-top: 2px;
+}
+
+.search-name {
+  font-weight: bold;
+}
+
+.search-folder {
+  color: #5f7d84;
+  font-size: 14px;
+}
+
+.search-count {
+  color: #5f7d84;
+  font-size: 14px;
+}
+
+.search-snippet {
+  color: #5f7d84;
+  margin-left: 5px;
+  padding: 1px 0 1px 10px;
+  border-left: 1px solid alpha(#0a2138, 0.18);
+}
+
+.completion listbox {
+  background-color: transparent;
+  color: #24404f;
+}
+
+.completion listbox > row {
+  border-radius: 3px;
+  padding: 2px 8px;
+}
+
+.completion listbox > row:selected {
+  background-color: #d9762b;
+  color: #f6e8cd;
+}
+
+.picker {
+  background-color: #ecdcb8;
+  color: #24404f;
+  border: 2px solid #0a2138;
+  border-radius: 3px;
+  padding: 8px 10px 6px 10px;
+}
+
+.picker entry {
+  font-size: 19px;
+  padding-bottom: 8px;
+}
+
+.picker listview {
+  background-color: transparent;
+  color: #24404f;
+  margin-top: 6px;
+}
+
+.picker listview > row {
+  border-radius: 3px;
+  padding: 4px 8px;
+}
+
+.picker listview > row:hover {
+  background-color: #d8c49a;
+}
+
+.picker listview > row:selected {
+  background-color: #d9762b;
+  color: #f6e8cd;
+}
+
+.picker-detail {
+  color: #5f7d84;
+}
+
+.picker listview > row:selected .picker-detail {
+  color: alpha(#f6e8cd, 0.65);
+}
+
 tooltip {
   background-color: #ecdcb8;
-  color: #0a2138;
+  color: #24404f;
   border: 2px solid #0a2138;
   border-radius: 3px;
 }

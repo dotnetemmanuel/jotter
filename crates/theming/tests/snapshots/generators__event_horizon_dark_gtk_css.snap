@@ -1,5 +1,6 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 44
 expression: "resolve(\"event-horizon\", Mode::Dark).to_gtk_css()"
 ---
 /* Event Horizon dark */
@@ -11,21 +12,34 @@ window {
 }
 
 headerbar {
-  background-color: #232530;
+  background-color: #1c1e26;
   background-image: none;
   color: #fadad1;
-  border-bottom: 2px solid #fadad1;
+  border-bottom: 1px solid #2e303e;
   box-shadow: none;
 }
 
+separator {
+  background-color: #2e303e;
+  min-height: 1px;
+  min-width: 1px;
+}
+
+paned > separator {
+  background-color: #2e303e;
+  background-image: none;
+  min-width: 1px;
+  min-height: 1px;
+}
+
 .sidebar {
-  background-color: #232530;
-  border-right: 2px solid #fadad1;
+  background-color: #1c1e26;
 }
 
 .sidebar listview {
   background-color: transparent;
   color: #fadad1;
+  padding-top: 6px;
 }
 
 .sidebar listview > row {
@@ -117,11 +131,26 @@ entry {
   border-bottom: 2px solid #fadad1;
   border-radius: 0;
   box-shadow: none;
+  outline: none;
   padding: 6px 2px;
+}
+
+entry:focus-within, entry:hover, entry:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 entry:focus-within {
   border-bottom-color: #ee64ac;
+}
+
+entry > text, entry > text:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {
+  outline: none;
 }
 
 popover > contents {
@@ -130,6 +159,118 @@ popover > contents {
   border: 2px solid #fadad1;
   border-radius: 3px;
   box-shadow: none;
+}
+
+.picker-scrim {
+  background-color: alpha(#1c1e26, 0.45);
+}
+
+.search-results {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.search-results > row {
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin: 0 6px;
+}
+
+.search-results > row:hover {
+  background-color: #2e303e;
+}
+
+.search-results > row:selected {
+  background-color: #2e303e;
+  color: #fadad1;
+  box-shadow: inset 2px 0 0 0 #ee64ac;
+}
+
+.search-heading {
+  margin-top: 14px;
+  padding: 2px 2px 4px 2px;
+  border-bottom: 1px solid alpha(#fadad1, 0.25);
+}
+
+.search-results > row:first-child .search-heading {
+  margin-top: 2px;
+}
+
+.search-name {
+  font-weight: bold;
+}
+
+.search-folder {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.search-count {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.search-snippet {
+  color: #6c6f93;
+  margin-left: 5px;
+  padding: 1px 0 1px 10px;
+  border-left: 1px solid alpha(#fadad1, 0.18);
+}
+
+.completion listbox {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.completion listbox > row {
+  border-radius: 3px;
+  padding: 2px 8px;
+}
+
+.completion listbox > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.picker {
+  background-color: #232530;
+  color: #fadad1;
+  border: 2px solid #fadad1;
+  border-radius: 3px;
+  padding: 8px 10px 6px 10px;
+}
+
+.picker entry {
+  font-size: 19px;
+  padding-bottom: 8px;
+}
+
+.picker listview {
+  background-color: transparent;
+  color: #fadad1;
+  margin-top: 6px;
+}
+
+.picker listview > row {
+  border-radius: 3px;
+  padding: 4px 8px;
+}
+
+.picker listview > row:hover {
+  background-color: #2e303e;
+}
+
+.picker listview > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.picker-detail {
+  color: #6c6f93;
+}
+
+.picker listview > row:selected .picker-detail {
+  color: alpha(#1c1e26, 0.65);
 }
 
 tooltip {
