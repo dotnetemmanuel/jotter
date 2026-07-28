@@ -138,6 +138,10 @@ struct State {
     dirty: Cell<bool>,
     /// Path open in single-file mode, absent in vault mode and for the sample.
     single_file: RefCell<Option<PathBuf>>,
+    /// Set while the app selects a tree row itself, so it does not open a note.
+    quiet_selection: Cell<bool>,
+    /// Tree row the app wants selected, reapplied after any rebuild.
+    wanted_row: RefCell<Option<PathBuf>>,
     /// Layer the picker panel is added to, above the editor and preview.
     overlay: gtk::Overlay,
     /// The application, for activating an action the command palette chose.
@@ -293,6 +297,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         pending_anchor: RefCell::new(None),
         dirty: Cell::new(false),
         single_file: RefCell::new(None),
+        quiet_selection: Cell::new(false),
+        wanted_row: RefCell::new(None),
         overlay: gtk::Overlay::new(),
         app: app.clone(),
         picker: RefCell::new(None),
@@ -350,6 +356,8 @@ fn present_window(app: &Application, state: &Rc<State>) {
     wire_save_on_close(&window, state);
     window.present();
 
+    // The note opened before the window existed, so the title is set once it does.
+    refresh_window_title(state);
     state.editor.grab_focus();
 }
 
@@ -493,6 +501,21 @@ fn load_note(state: &Rc<State>, rel: &Path) {
     // kill does not cost more than the folders opened since the last note switch.
     remember_layout(state);
     refresh_backlinks(state);
+    refresh_window_title(state);
+}
+
+/// Retitles the window for the open note and whether it has unsaved edits.
+fn refresh_window_title(state: &Rc<State>) {
+    let name = state
+        .session
+        .borrow()
+        .as_ref()
+        .and_then(|session| session.current.borrow().clone())
+        .or_else(|| state.single_file.borrow().clone())
+        .map(|rel| stem_of(&rel));
+    if let Some(window) = state.overlay.root().and_downcast::<gtk::Window>() {
+        window.set_title(Some(&title::window_title(name.as_deref(), state.dirty.get())));
+    }
 }
 
 /// How many linking lines the strip shows per note.
@@ -621,11 +644,17 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
     // Single-selection change also opens a file, so a single click is enough.
     let select_state = Rc::clone(state);
     selection.connect_selection_changed(move |sel, _, _| {
+        // A selection the app made itself is a highlight, not a request to open.
+        if select_state.quiet_selection.get() {
+            return;
+        }
         let Some(row) = sel.selected_item().and_downcast::<TreeListRow>() else {
             return;
         };
         if let Some(node) = row.item().and_downcast::<gtk::StringObject>() {
             let rel = PathBuf::from(node.string().as_str());
+            // Remembered so a rebuild puts the highlight back where the user left it.
+            select_state.wanted_row.replace(Some(rel.clone()));
             if is_file_node(&select_state, &node.string()) {
                 load_note(&select_state, &rel);
             }
@@ -683,6 +712,7 @@ fn rebuild_tree(state: &Rc<State>) {
     if let Some(session) = state.session.borrow().as_ref() {
         *session.tree_model.borrow_mut() = model;
     }
+    reselect_wanted(state);
 }
 
 /// Re-reads titles after a reindex, redrawing the tree only when one changed.
@@ -825,6 +855,28 @@ fn restore_expanded(model: &TreeListModel, want: &HashSet<String>) {
 /// Expands every ancestor folder so the target row exists in the flattened list,
 /// then selects it. Used to highlight a freshly created or renamed note.
 fn select_in_tree(state: &Rc<State>, rel: &Path) {
+    // Remembered so a later rebuild, including one the watcher triggers after an
+    // in-app rename, does not drop the selection back to the first row.
+    state.wanted_row.replace(Some(rel.to_path_buf()));
+    reselect_wanted(state);
+}
+
+/// Reapplies the wanted row once the tree has settled.
+///
+/// A freshly installed `ListView` ignores focus until it is laid out, and then
+/// parks focus on its first row, so this always waits for the next idle turn.
+fn reselect_wanted(state: &Rc<State>) {
+    let state = Rc::clone(state);
+    gtk::glib::idle_add_local_once(move || {
+        let wanted = state.wanted_row.borrow().clone();
+        if let Some(rel) = wanted {
+            select_in_tree_now(&state, &rel);
+        }
+    });
+}
+
+/// Selects and focuses the row for `rel`, expanding its ancestors first.
+fn select_in_tree_now(state: &Rc<State>, rel: &Path) {
     // Expand every ancestor folder so the target row is present after the rebuild.
     let mut ancestors: HashSet<String> = HashSet::new();
     let mut cur = rel.parent();
@@ -855,7 +907,14 @@ fn select_in_tree(state: &Rc<State>, rel: &Path) {
             && let Some(node) = row.item().and_downcast::<gtk::StringObject>()
             && node.string().as_str() == want
         {
+            state.quiet_selection.set(true);
             selection.set_selected(i);
+            list_view.scroll_to(
+                i,
+                gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
+                None,
+            );
+            state.quiet_selection.set(false);
             break;
         }
     }
@@ -1630,6 +1689,7 @@ fn save_note(state: &Rc<State>) {
             state.status.set_text(&format!("Saved {name}"));
             refresh_titles(state);
             refresh_backlinks(state);
+            refresh_window_title(state);
         }
         None => state.status.set_text("Nothing to save"),
     }
@@ -1698,7 +1758,11 @@ fn nearest_heading(headings: &[jotter_parser::HeadingAnchor], caret_1based: i32)
 fn wire_debounce(state: &Rc<State>) {
     let changed_state = Rc::clone(state);
     state.editor.connect_changed(move || {
+        let was_clean = !changed_state.dirty.get();
         changed_state.dirty.set(true);
+        if was_clean {
+            refresh_window_title(&changed_state);
+        }
 
         // Cancel a pending pass so only the latest change fires.
         if let Some(old) = changed_state.pending.borrow_mut().take() {
@@ -1844,19 +1908,47 @@ fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
     }
 }
 
+/// What a delete asks before doing it. `notes` counts what a folder holds.
+fn delete_question(name: &str, notes: Option<usize>) -> String {
+    match notes {
+        None => format!("Delete \"{name}\" to trash?"),
+        Some(0) => format!("Delete the empty folder \"{name}\" to trash?"),
+        Some(1) => format!("Delete \"{name}\" and the 1 note inside it to trash?"),
+        Some(count) => format!("Delete \"{name}\" and the {count} notes inside it to trash?"),
+    }
+}
+
+/// What a right-clicked tree row is, which decides the menu wording.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Note,
+    Folder,
+}
+
+/// The context menu for a row of `kind`, or for empty space when there is none.
+fn tree_menu(kind: Option<Kind>) -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("New note"), Some("app.tree-new-note"));
+    menu.append(Some("New folder"), Some("app.tree-new-folder"));
+    let Some(kind) = kind else {
+        return menu;
+    };
+    let (rename, delete) = match kind {
+        Kind::Note => ("Rename note", "Delete note to trash"),
+        Kind::Folder => ("Rename folder", "Delete folder to trash"),
+    };
+    menu.append(Some(rename), Some("app.tree-rename"));
+    menu.append(Some(delete), Some("app.tree-delete"));
+    menu
+}
+
 /// Wires a right-click context menu on the tree with note/folder operations.
 ///
 /// The right-clicked row (not the selection) is the operation target, resolved by
 /// hit-testing the click and stashed in `target` for the actions to read. A click
 /// in empty space leaves `target` as `None`, meaning the vault root.
 fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
-    let menu = gio::Menu::new();
-    menu.append(Some("New note"), Some("app.tree-new-note"));
-    menu.append(Some("New folder"), Some("app.tree-new-folder"));
-    menu.append(Some("Rename"), Some("app.tree-rename"));
-    menu.append(Some("Delete to trash"), Some("app.tree-delete"));
-
-    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    let popover = gtk::PopoverMenu::from_model(Some(&tree_menu(None)));
     popover.set_parent(list_view);
     popover.set_has_arrow(false);
 
@@ -1868,9 +1960,22 @@ fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
     let popover_click = popover.clone();
     let list_view_hit = list_view.clone();
     let target_press = Rc::clone(&target);
+    let menu_state = Rc::clone(state);
     gesture.connect_pressed(move |_, _, x, y| {
         // Resolve the target from the row under the pointer, not the prior selection.
-        *target_press.borrow_mut() = row_at(&list_view_hit, x, y);
+        let hit = row_at(&list_view_hit, x, y);
+        let kind = hit.as_ref().map(|rel| {
+            if is_file_node(&menu_state, &rel.to_string_lossy()) {
+                Kind::Note
+            } else {
+                Kind::Folder
+            }
+        });
+        popover_click.set_menu_model(Some(&tree_menu(kind)));
+        if let Some(rel) = hit.as_ref() {
+            select_in_tree_now(&menu_state, rel);
+        }
+        *target_press.borrow_mut() = hit;
         // Point the popover at the click; widget coordinates never exceed i32 range.
         let rect = gdk::Rectangle::new(px_to_i32(x), px_to_i32(y), 1, 1);
         popover_click.set_pointing_to(Some(&rect));
@@ -1953,7 +2058,7 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
     });
     app.add_action(&new_folder);
 
-    // Rename: only meaningful for a file target.
+    // Rename: a note keeps its .md, a folder is renamed with its whole subtree.
     let rename = gio::SimpleAction::new("tree-rename", None);
     let s = Rc::clone(state);
     let t = Rc::clone(target);
@@ -1961,22 +2066,25 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
         let Some(rel) = t.borrow().clone() else {
             return;
         };
-        if !is_file_node(&s, &rel.to_string_lossy()) {
-            return;
-        }
+        let is_file = is_file_node(&s, &rel.to_string_lossy());
         let default = rel
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("note.md")
             .to_owned();
+        let title = if is_file { "Rename note" } else { "Rename folder" };
         let s2 = Rc::clone(&s);
-        prompt(&s, "Rename note", &default, move |name| {
-            rename_note(&s2, &rel, &name);
+        prompt(&s, title, &default, move |name| {
+            if is_file {
+                rename_note(&s2, &rel, &name);
+            } else {
+                rename_folder(&s2, &rel, &name);
+            }
         });
     });
     app.add_action(&rename);
 
-    // Delete to trash: only for a file target.
+    // Delete to trash: a folder goes whole, with everything under it.
     let delete = gio::SimpleAction::new("tree-delete", None);
     let s = Rc::clone(state);
     let t = Rc::clone(target);
@@ -1984,11 +2092,134 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
         let Some(rel) = t.borrow().clone() else {
             return;
         };
-        if is_file_node(&s, &rel.to_string_lossy()) {
-            delete_note(&s, &rel);
-        }
+        let is_file = is_file_node(&s, &rel.to_string_lossy());
+        let name = rel.to_string_lossy().into_owned();
+        let inside = (!is_file).then(|| notes_under(&s, &rel).len());
+        let s2 = Rc::clone(&s);
+        confirm(&s, &delete_question(&name, inside), "Delete", move || {
+            if is_file {
+                delete_note(&s2, &rel);
+            } else {
+                delete_folder(&s2, &rel);
+            }
+        });
     });
     app.add_action(&delete);
+}
+
+/// Indexed notes living under `rel`, by vault-relative path.
+fn notes_under(state: &Rc<State>, rel: &Path) -> Vec<String> {
+    let prefix = format!("{}/", vault_session::rel_to_key(rel));
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return Vec::new();
+    };
+    session
+        .index
+        .all_notes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|note| note.path)
+        .filter(|path| path.starts_with(&prefix))
+        .collect()
+}
+
+/// Leaves the editor showing another note, or nothing when the vault is empty.
+fn close_current_note(state: &Rc<State>) {
+    if let Some(session) = state.session.borrow().as_ref() {
+        session.current.replace(None);
+    }
+    if let Some(rel) = first_note(state) {
+        load_note(state, &rel);
+        select_in_tree(state, &rel);
+        return;
+    }
+    state.editor.set_initial_text("");
+    state.dirty.set(false);
+    refresh_backlinks(state);
+    refresh_window_title(state);
+}
+
+/// Renames a folder and every note under it, following the open note if it moved.
+fn rename_folder(state: &Rc<State>, rel: &Path, name: &str) {
+    let name = name.trim();
+    if name.is_empty() || rel.as_os_str().is_empty() {
+        return;
+    }
+    let to = rel.parent().map(Path::to_path_buf).unwrap_or_default().join(name);
+    let moved_current = {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        if let Err(err) = session.vault.rename_note(rel, &to) {
+            eprintln!("jotter: could not rename folder {}: {err}", rel.display());
+            return;
+        }
+        reindex_moved(session, rel, Some(&to));
+        session
+            .current
+            .borrow()
+            .as_ref()
+            .and_then(|current| current.strip_prefix(rel).ok())
+            .map(|tail| to.join(tail))
+    };
+    refresh_tree(state);
+    match moved_current {
+        // The open note moved with the folder, so the tree follows the note.
+        Some(current) => {
+            load_note(state, &current);
+            select_in_tree(state, &current);
+        }
+        None => select_in_tree(state, &to),
+    }
+}
+
+/// Moves a folder to the trash with everything under it.
+fn delete_folder(state: &Rc<State>, rel: &Path) {
+    if rel.as_os_str().is_empty() {
+        return;
+    }
+    let held_current;
+    {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        if let Err(err) = session.vault.delete_to_trash(rel) {
+            eprintln!("jotter: could not delete folder {}: {err}", rel.display());
+            return;
+        }
+        reindex_moved(session, rel, None);
+        held_current = session
+            .current
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| current.starts_with(rel));
+    }
+    refresh_tree(state);
+    if held_current {
+        close_current_note(state);
+    }
+}
+
+/// Moves index rows from under `from` to under `to`, or drops them when the
+/// folder went to the trash.
+fn reindex_moved(session: &VaultSession, from: &Path, to: Option<&Path>) {
+    let prefix = format!("{}/", vault_session::rel_to_key(from));
+    let Ok(notes) = session.index.all_notes() else {
+        return;
+    };
+    for note in notes.iter().filter(|note| note.path.starts_with(&prefix)) {
+        let old = PathBuf::from(&note.path);
+        let _ = vault_session::deindex_note(&session.index, &old);
+        if let Some(to) = to
+            && let Ok(tail) = old.strip_prefix(from)
+        {
+            let moved = to.join(tail);
+            let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, &moved);
+        }
+    }
 }
 
 /// Creates a note named `name` (defaulting the `.md` extension) under `dir`.
@@ -2102,6 +2333,7 @@ fn rename_note(state: &Rc<State>, rel: &Path, name: &str) {
 
 /// Moves the note at `rel` to the vault trash and drops it from the index.
 fn delete_note(state: &Rc<State>, rel: &Path) {
+    let was_current;
     {
         let session_ref = state.session.borrow();
         let Some(session) = session_ref.as_ref() else {
@@ -2116,8 +2348,12 @@ fn delete_note(state: &Rc<State>, rel: &Path) {
                 return;
             }
         }
+        was_current = session.current.borrow().as_deref() == Some(rel);
     }
     refresh_tree(state);
+    if was_current {
+        close_current_note(state);
+    }
 }
 
 /// Rounds a widget-local coordinate to a pixel, clamped to the `i32` range.
@@ -2148,6 +2384,64 @@ fn stem_of(path: &Path) -> String {
 ///
 /// Uses a plain transient `gtk::Window` (the old `gtk::Dialog` is deprecated since
 /// GTK 4.10). Enter or the OK button confirms, Escape or Cancel dismisses.
+fn confirm<F: Fn() + 'static>(state: &Rc<State>, question: &str, action: &str, on_yes: F) {
+    let parent = state.sidebar.root().and_downcast::<gtk::Window>();
+    let dialog = gtk::Window::builder()
+        .title("Confirm")
+        .modal(true)
+        .default_width(380)
+        .build();
+    if let Some(parent) = parent.as_ref() {
+        dialog.set_transient_for(Some(parent));
+    }
+
+    let content = gtk::Box::new(Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    content.append(
+        &gtk::Label::builder()
+            .label(question)
+            .xalign(0.0)
+            .wrap(true)
+            .build(),
+    );
+
+    let buttons = gtk::Box::new(Orientation::Horizontal, 8);
+    buttons.set_halign(gtk::Align::End);
+    let cancel = gtk::Button::with_label("Cancel");
+    let go = gtk::Button::with_label(action);
+    go.add_css_class("destructive-action");
+    buttons.append(&cancel);
+    buttons.append(&go);
+    content.append(&buttons);
+    dialog.set_child(Some(&content));
+
+    let go_dialog = dialog.clone();
+    go.connect_clicked(move |_| {
+        on_yes();
+        go_dialog.close();
+    });
+    let cancel_dialog = dialog.clone();
+    cancel.connect_clicked(move |_| cancel_dialog.close());
+
+    let escape = gtk::EventControllerKey::new();
+    let escape_dialog = dialog.clone();
+    escape.connect_key_pressed(move |_, key, _, _| {
+        if key == gdk::Key::Escape {
+            escape_dialog.close();
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    dialog.add_controller(escape);
+
+    dialog.present();
+    cancel.grab_focus();
+}
+
+/// Prompts for one line of text, running `on_ok` with what was typed.
 fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str, on_ok: F) {
     let parent = state.sidebar.root().and_downcast::<gtk::Window>();
     let dialog = gtk::Window::builder()
@@ -2201,6 +2495,40 @@ fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str
 
 #[cfg(test)]
 mod tests {
+    use super::delete_question;
+
+    #[test]
+    fn deleting_a_note_names_it() {
+        assert_eq!(
+            delete_question("notes/plan.md", None),
+            "Delete \"notes/plan.md\" to trash?"
+        );
+    }
+
+    #[test]
+    fn deleting_a_folder_counts_what_goes_with_it() {
+        assert_eq!(
+            delete_question("scratch", Some(3)),
+            "Delete \"scratch\" and the 3 notes inside it to trash?"
+        );
+    }
+
+    #[test]
+    fn one_note_inside_reads_singular() {
+        assert_eq!(
+            delete_question("scratch", Some(1)),
+            "Delete \"scratch\" and the 1 note inside it to trash?"
+        );
+    }
+
+    #[test]
+    fn an_empty_folder_says_it_is_empty() {
+        assert_eq!(
+            delete_question("scratch", Some(0)),
+            "Delete the empty folder \"scratch\" to trash?"
+        );
+    }
+
     use super::{Startup, resolve_startup};
     use crate::config::Config;
     use std::path::Path;

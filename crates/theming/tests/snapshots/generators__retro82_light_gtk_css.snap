@@ -52,6 +52,10 @@ paned > separator {
   background-color: #d8c49a;
 }
 
+.sidebar listview > row:focus-within {
+  box-shadow: inset 2px 0 0 0 #d9762b;
+}
+
 .tree-title {
   color: #5f7d84;
   font-size: 14px;

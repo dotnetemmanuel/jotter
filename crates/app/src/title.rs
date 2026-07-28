@@ -39,10 +39,36 @@ fn first_h1(text: &str) -> Option<String> {
     None
 }
 
+/// The window title: the open note, an unsaved marker, and the app name.
+#[must_use]
+pub fn window_title(note: Option<&str>, dirty: bool) -> String {
+    let Some(note) = note else {
+        return "jotter".to_string();
+    };
+    let marker = if dirty { "\u{2022} " } else { "" };
+    format!("{marker}{note} - jotter")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extract_title;
+    use super::{extract_title, window_title};
     use std::path::Path;
+
+    #[test]
+    fn no_note_leaves_the_bare_app_name() {
+        assert_eq!(window_title(None, false), "jotter");
+        assert_eq!(window_title(None, true), "jotter");
+    }
+
+    #[test]
+    fn a_saved_note_is_named_plainly() {
+        assert_eq!(window_title(Some("phase3-plan"), false), "phase3-plan - jotter");
+    }
+
+    #[test]
+    fn unsaved_edits_get_a_marker() {
+        assert_eq!(window_title(Some("phase3-plan"), true), "\u{2022} phase3-plan - jotter");
+    }
 
     #[test]
     fn frontmatter_title_wins() {
