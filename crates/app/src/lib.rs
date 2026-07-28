@@ -3,6 +3,7 @@
 //! edit-preview toggle loop, and (in vault mode) the file tree, background index,
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
+mod commands;
 mod config;
 mod links;
 mod picker;
@@ -57,6 +58,15 @@ const MAX_SUGGESTIONS: usize = 5;
 /// How many rows the picker shows at most, however many notes matched.
 const MAX_PICKER_ROWS: usize = 50;
 
+/// Actions the command palette offers, in the order it lists them.
+const PALETTE_COMMANDS: [(&str, &str); 5] = [
+    ("quick-open", "Go to note"),
+    ("save", "Save note"),
+    ("toggle-mode", "Toggle edit and preview"),
+    ("toggle-theme", "Toggle light and dark theme"),
+    ("toggle-sidebar", "Toggle sidebar"),
+];
+
 /// Fallback document shown when no path is given or a read fails.
 const SAMPLE_MARKDOWN: &str = "# jotter\n\nA native GTK4 markdown vault.\n\n## Toggle\n\nPress Ctrl+E to switch between edit and preview.\n\n## Code\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
 
@@ -109,6 +119,10 @@ struct State {
     single_file: RefCell<Option<PathBuf>>,
     /// Layer the picker panel is added to, above the editor and preview.
     overlay: gtk::Overlay,
+    /// The application, for activating an action the command palette chose.
+    app: Application,
+    /// The picker while it is open, so its key can toggle it shut again.
+    picker: RefCell<Option<picker::Handle>>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -245,6 +259,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         dirty: Cell::new(false),
         single_file: RefCell::new(None),
         overlay: gtk::Overlay::new(),
+        app: app.clone(),
+        picker: RefCell::new(None),
     });
 
     // Load content per the resolved startup target, opening a vault if requested.
@@ -261,6 +277,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     wire_editor_links(&state);
     wire_save(app, &state);
     wire_quick_open(app, &state);
+    wire_command_palette(app, &state);
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
@@ -747,36 +764,102 @@ fn toggle_mode(state: &Rc<State>) {
     }
 }
 
-/// Install a Ctrl+O accelerator that opens the quick switcher.
+/// Install a Ctrl+O accelerator that opens the picker on notes.
 fn wire_quick_open(app: &Application, state: &Rc<State>) {
     let action = gio::SimpleAction::new("quick-open", None);
     let open_state = Rc::clone(state);
-    action.connect_activate(move |_, _| open_switcher(&open_state));
+    action.connect_activate(move |_, _| open_picker(&open_state, ""));
     app.add_action(&action);
     app.set_accels_for_action("app.quick-open", &["<Primary>o"]);
 }
 
-/// Opens the quick switcher: recents when empty, fuzzy over the vault as you type.
-fn open_switcher(state: &Rc<State>) {
-    let Some(notes) = switcher_candidates(state) else {
-        return;
-    };
-    let recents = recent_notes(state);
+/// Install a Ctrl+P accelerator that opens the picker already in command mode.
+fn wire_command_palette(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("command-palette", None);
+    let open_state = Rc::clone(state);
+    let prefix = commands::PREFIX.to_string();
+    action.connect_activate(move |_, _| open_picker(&open_state, &prefix));
+    app.add_action(&action);
+    app.set_accels_for_action("app.command-palette", &["<Primary>p"]);
+}
 
+/// Opens the picker: notes by default, commands while the query starts with `>`.
+///
+/// Recents fill the empty note list; the whole command list fills the empty
+/// command one.
+fn open_picker(state: &Rc<State>, initial_query: &str) {
+    // Its own key toggles the picker shut; the other key switches mode instead.
+    let open = state.picker.borrow().clone();
+    if let Some(handle) = open {
+        if commands::same_mode(&handle.query(), initial_query) {
+            handle.close();
+        } else {
+            handle.set_query(initial_query);
+        }
+        return;
+    }
+
+    let notes = switcher_candidates(state).unwrap_or_default();
+    let recents = recent_notes(state);
+    let command_list = command_list(&state.app);
+
+    // Set by the source on every keystroke so activation knows which list it chose from.
+    let in_command_mode = Rc::new(Cell::new(false));
+
+    let source_mode = Rc::clone(&in_command_mode);
     let activate = Rc::clone(state);
     let restore = Rc::clone(state);
-    picker::open(
+    let handle = picker::open(
         &state.overlay,
-        "Go to note",
-        "",
-        move |query| switcher::rows(query, &notes, &recents, MAX_PICKER_ROWS),
+        "Go to note, or > for commands",
+        initial_query,
+        move |query| {
+            if let Some(rest) = commands::command_query(query) {
+                source_mode.set(true);
+                return commands::rows(rest, &command_list, MAX_PICKER_ROWS);
+            }
+            source_mode.set(false);
+            switcher::rows(query, &notes, &recents, MAX_PICKER_ROWS)
+        },
         move |key| {
+            if in_command_mode.get() {
+                activate.app.activate_action(key, None);
+                return;
+            }
             let rel = PathBuf::from(key);
             load_note(&activate, &rel);
             select_in_tree(&activate, &rel);
         },
-        move || restore.editor.grab_focus(),
+        move || {
+            restore.picker.replace(None);
+            restore.editor.grab_focus();
+        },
     );
+    state.picker.replace(Some(handle));
+}
+
+/// Every command the palette offers, labelled with its current accelerator.
+fn command_list(app: &Application) -> Vec<commands::Command> {
+    PALETTE_COMMANDS
+        .iter()
+        .map(|(action, title)| commands::Command {
+            action: (*action).to_string(),
+            title: (*title).to_string(),
+            accel: accel_label(app, action),
+        })
+        .collect()
+}
+
+/// The first accelerator bound to `action`, as a display label like `Ctrl+S`.
+fn accel_label(app: &Application, action: &str) -> String {
+    let accels = app.accels_for_action(&format!("app.{action}"));
+    let Some(first) = accels.first() else {
+        return String::new();
+    };
+    let Some((key, mods)) = gtk::accelerator_parse(first) else {
+        return String::new();
+    };
+    gtk::accelerator_get_label(key, mods).to_string()
 }
 
 /// Every note the switcher can offer, from the index, falling back to the vault

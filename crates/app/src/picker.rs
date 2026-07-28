@@ -9,6 +9,33 @@ use gtk::{
     Align, ListView, Orientation, ScrolledWindow, SignalListItemFactory, SingleSelection, gdk, glib,
 };
 
+/// A live picker, so the caller can close it or switch it to another mode.
+#[derive(Clone)]
+pub struct Handle {
+    entry: gtk::Entry,
+    close: Rc<dyn Fn()>,
+}
+
+impl Handle {
+    /// The text currently in the entry.
+    #[must_use]
+    pub fn query(&self) -> String {
+        self.entry.text().to_string()
+    }
+
+    /// Replaces the query, refilling the list and leaving the caret at the end.
+    pub fn set_query(&self, text: &str) {
+        self.entry.set_text(text);
+        self.entry.set_position(-1);
+        self.entry.grab_focus();
+    }
+
+    /// Dismisses the picker as Escape would.
+    pub fn close(&self) {
+        (self.close)();
+    }
+}
+
 /// One line in the picker list.
 pub struct Row {
     /// Opaque identifier handed back on activation.
@@ -33,7 +60,8 @@ pub fn open<S, A, C>(
     source: S,
     activate: A,
     on_close: C,
-) where
+) -> Handle
+where
     S: Fn(&str) -> Vec<Row> + 'static,
     A: Fn(&str) + 'static,
     C: Fn() + 'static,
@@ -151,6 +179,8 @@ pub fn open<S, A, C>(
 
     entry.grab_focus();
     entry.set_position(-1);
+
+    Handle { entry, close }
 }
 
 /// Builds the two-label row factory, reading each row out of `rows` on bind.
