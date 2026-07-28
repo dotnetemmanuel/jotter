@@ -55,6 +55,11 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
 .search-results > row {{\n  border-radius: {r}px;\n  padding: 1px 6px;\n  margin: 0 6px;\n}}\n\n\
 .search-results > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .search-results > row:selected {{\n  background-color: {overlay};\n  color: {text};\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.panel-back {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {text};\n  padding: 0 4px;\n  margin: 0;\n  min-height: 0;\n  min-width: 0;\n}}\n\n\
+.panel-back label {{\n  font-family: {editor_font};\n  font-size: {back_size}px;\n  margin-bottom: 3px;\n}}\n\n\
+.panel-back:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
+.tags-heading {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.tag-row {{\n  padding: 3px 4px;\n}}\n\n\
 .search-heading {{\n  margin-top: 14px;\n  padding: 2px 2px 4px 2px;\n  border-bottom: 1px solid alpha({border}, 0.25);\n}}\n\n\
 .search-results > row:first-child .search-heading {{\n  margin-top: 2px;\n}}\n\n\
 .search-name {{\n  font-weight: bold;\n}}\n\n\
@@ -83,9 +88,11 @@ tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px s
             danger = c.danger,
             muted = c.muted,
             ui_font = t.ui_font,
+            editor_font = t.editor_font,
             size = t.font_size,
             picker_size = t.font_size + 4,
             small = t.font_size.saturating_sub(1),
+            back_size = t.font_size + 1,
         )
     }
 }

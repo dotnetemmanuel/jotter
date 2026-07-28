@@ -12,6 +12,7 @@ mod picker;
 mod results;
 mod search;
 mod search_panel;
+mod tags_panel;
 mod switcher;
 mod title;
 mod tree;
@@ -51,9 +52,10 @@ const PAGE_EDIT: &str = "edit";
 /// Stack page name for the preview.
 const PAGE_PREVIEW: &str = "preview";
 
-/// Sidebar page names: the file tree, and the search panel.
+/// Sidebar page names: the file tree, search, and tags.
 const PAGE_TREE: &str = "tree";
 const PAGE_SEARCH: &str = "search";
+const PAGE_TAGS: &str = "tags";
 
 /// Debounce before a typed query hits the index, in milliseconds.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
@@ -78,12 +80,14 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 5] = [
+const PALETTE_COMMANDS: [(&str, &str); 7] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
     ("toggle-theme", "Toggle light and dark theme"),
     ("toggle-sidebar", "Toggle sidebar"),
+    ("tags", "Browse tags"),
+    ("search", "Search notes"),
 ];
 
 /// Fallback document shown when no path is given or a read fails.
@@ -156,6 +160,8 @@ struct State {
     sidebar_stack: Stack,
     /// The full-text search page.
     search_panel: Rc<search_panel::Panel>,
+    /// The tag page.
+    tags_panel: Rc<tags_panel::Panel>,
     /// Pending debounced search, replaced on each keystroke.
     search_pending: RefCell<Option<SourceId>>,
 }
@@ -274,7 +280,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .margin_bottom(2)
         .build();
 
-    let (search_panel, sidebar_stack, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
+    let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
+    let sidebar_stack = pages.stack.clone();
 
     let backlinks = build_backlinks(&theme.chrome.accent, &opened);
 
@@ -305,7 +312,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         completion,
         backlinks: Rc::clone(&backlinks),
         sidebar_stack: sidebar_stack.clone(),
-        search_panel,
+        search_panel: pages.search,
+        tags_panel: pages.tags,
         search_pending: RefCell::new(None),
     });
     opened.replace(Some(Rc::clone(&state)));
@@ -989,29 +997,160 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_command_palette(app, state);
     wire_completion(state);
     wire_search(app, state);
+    wire_tags(app, state);
+    wire_editor_escape(state);
+}
+
+/// Install Ctrl+Shift+T, and the tag page behavior behind it.
+fn wire_tags(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("tags", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| show_tags(&open_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.tags", &["<Primary><Shift>t"]);
+
+    // Escape and the back arrow both step one level: notes to tags, tags to tree.
+    let escaping = Rc::clone(state);
+    state.tags_panel.connect_escape(move || tags_back(&escaping));
+    let going_back = Rc::clone(state);
+    state.tags_panel.connect_back(move || tags_back(&going_back));
+}
+
+/// Steps the tag page back one level, leaving the sidebar when already at the top.
+fn tags_back(state: &Rc<State>) {
+    if matches!(state.tags_panel.view(), tags_panel::View::Notes(_)) {
+        show_tags(state);
+        return;
+    }
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Escape in the editor hands focus back to the sidebar page it came from.
+fn wire_editor_escape(state: &Rc<State>) {
+    let escaping = Rc::clone(state);
+    state.editor.connect_key_capture(move |key| {
+        if key != gdk::Key::Escape || escaping.completion.is_open() {
+            return false;
+        }
+        if !escaping.sidebar_stack.get_visible() {
+            return false;
+        }
+        match escaping.sidebar_stack.visible_child_name().as_deref() {
+            Some(PAGE_TAGS) => {
+                escaping.tags_panel.focus_list();
+                true
+            }
+            Some(PAGE_SEARCH) => {
+                escaping.search_panel.focus();
+                true
+            }
+            _ => false,
+        }
+    });
+}
+
+/// Reveals the tag list, or closes the page when it is already showing.
+fn show_tags(state: &Rc<State>) {
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_TAGS);
+    if showing && state.tags_panel.has_focus() && matches!(state.tags_panel.view(), tags_panel::View::Tags) {
+        state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+        state.editor.grab_focus();
+        return;
+    }
+
+    let counts = {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        session.index.tag_counts().unwrap_or_default()
+    };
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_TAGS);
+    state.tags_panel.show_tags(&counts);
+}
+
+/// Shows the notes carrying `tag`, with the lines the tag appears on.
+fn show_tagged_notes(state: &Rc<State>, tag: &str) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let notes = session.index.tagged_notes(tag).unwrap_or_default();
+    let terms = [format!("#{tag}")];
+    let hits: Vec<results::Hit> = notes
+        .into_iter()
+        .map(|note| {
+            let text = session
+                .vault
+                .read_note(Path::new(&note.path))
+                .unwrap_or_default();
+            results::Hit {
+                snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
+                path: note.path,
+            }
+        })
+        .collect();
+    state.tags_panel.show_notes(tag, &hits);
 }
 
 /// The state a search row activates through, filled in once the state exists.
 type LateState = Rc<RefCell<Option<Rc<State>>>>;
 
 /// Builds the two-page sidebar and the cell its rows activate through.
-fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Rc<search_panel::Panel>, Stack, LateState) {
+fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
     let opened: LateState = Rc::new(RefCell::new(None));
+
     let target = Rc::clone(&opened);
-    let panel = search_panel::Panel::new(accent, move |path, line| {
+    let search = search_panel::Panel::new(accent, move |path, line| {
         let state = target.borrow().clone();
         if let Some(state) = state {
             open_search_hit(&state, path, line);
         }
     });
 
+    let tag_target = Rc::clone(&opened);
+    let note_target = Rc::clone(&opened);
+    let tags = tags_panel::Panel::new(
+        accent,
+        move |tag| {
+            let state = tag_target.borrow().clone();
+            if let Some(state) = state {
+                show_tagged_notes(&state, tag);
+            }
+        },
+        move |path, line| {
+            let state = note_target.borrow().clone();
+            if let Some(state) = state {
+                open_search_hit(&state, path, line);
+            }
+        },
+    );
+
     let stack = Stack::new();
     stack.add_named(tree, Some(PAGE_TREE));
-    stack.add_named(&panel.widget(), Some(PAGE_SEARCH));
+    stack.add_named(&search.widget(), Some(PAGE_SEARCH));
+    stack.add_named(&tags.widget(), Some(PAGE_TAGS));
     stack.set_visible_child_name(PAGE_TREE);
     stack.add_css_class("sidebar");
 
-    (panel, stack, opened)
+    (
+        Sidebar {
+            search,
+            tags,
+            stack,
+        },
+        opened,
+    )
+}
+
+/// The sidebar pages, built together and handed to the state.
+struct Sidebar {
+    search: Rc<search_panel::Panel>,
+    tags: Rc<tags_panel::Panel>,
+    stack: Stack,
 }
 
 /// Builds the backlinks strip, opening notes through the state once it exists.
@@ -1056,6 +1195,8 @@ fn wire_search(app: &Application, state: &Rc<State>) {
 
     let escaping = Rc::clone(state);
     state.search_panel.connect_escape(move || close_search(&escaping));
+    let going_back = Rc::clone(state);
+    state.search_panel.connect_back(move || close_search(&going_back));
 }
 
 /// Reveals the search page and puts the caret in its entry.
@@ -1387,6 +1528,7 @@ fn toggle_theme_mode(state: &Rc<State>) {
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
     state.search_panel.set_accent(&next.chrome.accent);
+    state.tags_panel.set_accent(&next.chrome.accent);
     state.backlinks.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 

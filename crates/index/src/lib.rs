@@ -381,6 +381,40 @@ impl Index {
         Ok(ids)
     }
 
+    /// Every tag with how many notes carry it, in alphabetical order.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn tag_counts(&self) -> Result<Vec<(String, i64)>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tag, count(*) FROM tags GROUP BY tag ORDER BY tag",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut counts = Vec::new();
+        for row in rows {
+            counts.push(row?);
+        }
+        Ok(counts)
+    }
+
+    /// Notes carrying `tag`, whole and sorted by path.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn tagged_notes(&self, tag: &str) -> Result<Vec<Note>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.id, n.path, n.title, n.mtime, n.size, n.frontmatter
+             FROM tags t JOIN notes n ON n.id = t.note_id
+             WHERE t.tag = ?1 ORDER BY n.path",
+        )?;
+        let rows = stmt.query_map(params![tag], Self::map_note)?;
+        let mut notes = Vec::new();
+        for note in rows {
+            notes.push(note?);
+        }
+        Ok(notes)
+    }
+
     /// Notes whose links resolve to `dst_path`, whole and sorted by path.
     ///
     /// The companion to [`Index::backlinks`] for callers that want the notes
@@ -927,6 +961,52 @@ mod tests {
             .unwrap();
         // Unbalanced quote is invalid FTS5 syntax; expect an empty result, not an error.
         assert!(index.search("\"unterminated").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_counts_are_alphabetical() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
+        index.set_tags(a, &["project".into(), "demo".into()]).unwrap();
+        index.set_tags(b, &["project".into(), "alpha".into()]).unwrap();
+        assert_eq!(
+            index.tag_counts().unwrap(),
+            [
+                ("alpha".to_string(), 1),
+                ("demo".to_string(), 1),
+                ("project".to_string(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vault_without_tags_counts_nothing() {
+        let index = Index::open_in_memory().unwrap();
+        index.upsert_note(&note("a.md", "A", "")).unwrap();
+        assert!(index.tag_counts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tagged_notes_come_back_whole_and_sorted() {
+        let index = Index::open_in_memory().unwrap();
+        for name in ["z.md", "a.md"] {
+            let id = index.upsert_note(&note(name, name, "")).unwrap();
+            index.set_tags(id, &["project".into()]).unwrap();
+        }
+        let paths: Vec<String> = index
+            .tagged_notes("project")
+            .unwrap()
+            .into_iter()
+            .map(|note| note.path)
+            .collect();
+        assert_eq!(paths, ["a.md", "z.md"]);
+    }
+
+    #[test]
+    fn an_unknown_tag_has_no_notes() {
+        let index = Index::open_in_memory().unwrap();
+        assert!(index.tagged_notes("nothing").unwrap().is_empty());
     }
 
     #[test]

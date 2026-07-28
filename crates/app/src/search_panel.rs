@@ -11,6 +11,7 @@ use crate::results::{Hit, List};
 /// The search sidebar page.
 pub struct Panel {
     root: gtk::Box,
+    back: gtk::Button,
     entry: gtk::Entry,
     status: gtk::Label,
     results: Rc<List>,
@@ -23,11 +24,27 @@ impl Panel {
     pub fn new<A: Fn(&str, i32) + 'static>(accent: &str, on_activate: A) -> Rc<Self> {
         let entry = gtk::Entry::builder()
             .placeholder_text("Search notes")
-            .margin_top(8)
-            .margin_bottom(4)
-            .margin_start(8)
-            .margin_end(8)
+            .hexpand(true)
             .build();
+
+        // The icon themes here only have chevrons, so the arrow is a Nerd Font
+        // glyph, which is centered on the em box rather than sitting on the baseline.
+        let back = gtk::Button::builder()
+            .label("\u{f060}")
+            .has_frame(false)
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::Start)
+            .tooltip_text("Back to files")
+            .build();
+        back.add_css_class("panel-back");
+
+        let bar = gtk::Box::new(Orientation::Horizontal, 4);
+        bar.set_margin_start(6);
+        bar.set_margin_end(8);
+        bar.set_margin_top(6);
+        bar.set_margin_bottom(4);
+        bar.append(&back);
+        bar.append(&entry);
 
         let status = gtk::Label::builder()
             .xalign(0.0)
@@ -44,12 +61,13 @@ impl Panel {
             .build();
 
         let root = gtk::Box::new(Orientation::Vertical, 0);
-        root.append(&entry);
+        root.append(&bar);
         root.append(&status);
         root.append(&scroller);
 
         Rc::new(Self {
             root,
+            back,
             entry,
             status,
             results,
@@ -89,6 +107,11 @@ impl Panel {
     pub fn connect_query<F: Fn(&str) + 'static>(&self, f: F) {
         self.entry
             .connect_changed(move |entry| f(entry.text().as_str()));
+    }
+
+    /// Runs `f` when the back arrow is clicked.
+    pub fn connect_back<F: Fn() + 'static>(&self, f: F) {
+        self.back.connect_clicked(move |_| f());
     }
 
     /// Runs `f` when Escape is pressed in the query entry.

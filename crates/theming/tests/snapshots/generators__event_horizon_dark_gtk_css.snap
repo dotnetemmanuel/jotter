@@ -218,6 +218,37 @@ popover > contents {
   box-shadow: inset 2px 0 0 0 #ee64ac;
 }
 
+.panel-back {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #fadad1;
+  padding: 0 4px;
+  margin: 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panel-back label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 16px;
+  margin-bottom: 3px;
+}
+
+.panel-back:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.tags-heading {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.tag-row {
+  padding: 3px 4px;
+}
+
 .search-heading {
   margin-top: 14px;
   padding: 2px 2px 4px 2px;
