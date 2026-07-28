@@ -27,6 +27,8 @@ paned > separator {{\n  background-color: {overlay};\n  background-image: none;\
 .sidebar listview {{\n  background-color: transparent;\n  color: {text};\n  padding-top: 6px;\n}}\n\n\
 .sidebar listview > row {{\n  border-radius: {r}px;\n  padding: 3px 8px;\n  margin: 1px 6px;\n}}\n\n\
 .sidebar listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.tree-title {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.sidebar listview > row:selected .tree-title {{\n  color: alpha({bg}, 0.7);\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .sidebar listview > row:selected:hover {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 button {{\n  background-color: {surface};\n  background-image: none;\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n  padding: 6px 14px;\n}}\n\n\

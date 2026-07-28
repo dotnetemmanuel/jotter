@@ -16,7 +16,7 @@ mod tree;
 mod vault_session;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
@@ -103,6 +103,8 @@ struct VaultSession {
     current: RefCell<Option<PathBuf>>,
     /// Wikilink target lookup, rebuilt from the index on structural change.
     resolver: RefCell<Resolver>,
+    /// Note path to display title, so tree rows need no query per bind.
+    titles: RefCell<HashMap<String, String>>,
 }
 
 /// Shared, single-threaded application state cloned into GTK closures.
@@ -397,6 +399,7 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         tree_model: RefCell::new(tree_model),
         current: RefCell::new(None),
         resolver: RefCell::new(Resolver::default()),
+        titles: RefCell::new(HashMap::new()),
     }));
 
     // The index persists across runs, so links can resolve before reindexing runs.
@@ -473,6 +476,13 @@ fn load_note(state: &Rc<State>, rel: &Path) {
     }
 }
 
+/// The indexed title of a note, when it says more than the filename does.
+fn note_title(state: &Rc<State>, rel: &str) -> Option<String> {
+    let session = state.session.borrow();
+    let title = session.as_ref()?.titles.borrow().get(rel).cloned()?;
+    (!title.is_empty()).then_some(title)
+}
+
 /// Builds (or rebuilds) the sidebar tree model and installs it on the `ListView`.
 ///
 /// Returns the new `TreeListModel` so the session can hold it for later rebuilds.
@@ -496,12 +506,20 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let label = Label::builder().halign(gtk::Align::Start).build();
+        let line = gtk::Box::new(Orientation::Horizontal, 6);
+        line.append(&Label::builder().halign(gtk::Align::Start).build());
+        let title = Label::builder()
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        title.add_css_class("tree-title");
+        line.append(&title);
         let expander = TreeExpander::new();
-        expander.set_child(Some(&label));
+        expander.set_child(Some(&line));
         item.set_child(Some(&expander));
     });
-    factory.connect_bind(|_, item| {
+    let bind_state = Rc::clone(state);
+    factory.connect_bind(move |_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
@@ -512,11 +530,25 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
             return;
         };
         expander.set_list_row(Some(&row));
-        if let Some(node) = row.item().and_downcast::<gtk::StringObject>()
-            && let Some(label) = expander.child().and_downcast::<Label>()
-        {
-            label.set_text(tree::label_for(&node.string()));
-        }
+        let Some(node) = row.item().and_downcast::<gtk::StringObject>() else {
+            return;
+        };
+        let Some(line) = expander.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let (Some(name), Some(title)) = (
+            line.first_child().and_downcast::<Label>(),
+            line.last_child().and_downcast::<Label>(),
+        ) else {
+            return;
+        };
+        let rel = node.string();
+        let label = tree::label_for(&rel);
+        name.set_text(label);
+        let stem = label.strip_suffix(".md").unwrap_or(label);
+        let shown = note_title(&bind_state, &rel).filter(|found| found != stem);
+        title.set_text(shown.as_deref().unwrap_or_default());
+        title.set_visible(shown.is_some());
     });
 
     let list_view = ListView::new(Some(selection.clone()), Some(factory));
@@ -578,6 +610,13 @@ fn is_file_node(state: &Rc<State>, rel: &str) -> bool {
 
 /// Rebuilds the tree model to reflect a structural change (create/rename/delete).
 fn refresh_tree(state: &Rc<State>) {
+    rebuild_tree(state);
+    update_note_count(state);
+    refresh_links(state);
+}
+
+/// Rebuilds the tree rows in place, keeping open folders open.
+fn rebuild_tree(state: &Rc<State>) {
     let (root, expanded) = {
         let session = state.session.borrow();
         let Some(session) = session.as_ref() else {
@@ -592,8 +631,41 @@ fn refresh_tree(state: &Rc<State>) {
     if let Some(session) = state.session.borrow().as_ref() {
         *session.tree_model.borrow_mut() = model;
     }
-    update_note_count(state);
-    refresh_links(state);
+}
+
+/// Re-reads titles after a reindex, redrawing the tree only when one changed.
+fn refresh_titles(state: &Rc<State>) {
+    let changed = {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        let Ok(notes) = session.index.all_notes() else {
+            return;
+        };
+        let fresh: HashMap<String, String> = notes
+            .into_iter()
+            .map(|note| (note.path, note.title))
+            .collect();
+        let mut titles = session.titles.borrow_mut();
+        let changed = *titles != fresh;
+        if changed {
+            *titles = fresh;
+        }
+        changed
+    };
+    if !changed {
+        return;
+    }
+    rebuild_tree(state);
+    let current = state
+        .session
+        .borrow()
+        .as_ref()
+        .and_then(|session| session.current.borrow().clone());
+    if let Some(rel) = current {
+        select_in_tree(state, &rel);
+    }
 }
 
 /// Re-tag the wikilinks in the editor buffer so they match what the preview links.
@@ -627,6 +699,10 @@ fn refresh_links(state: &Rc<State>) {
         };
         match session.index.all_notes() {
             Ok(notes) => {
+                *session.titles.borrow_mut() = notes
+                    .iter()
+                    .map(|note| (note.path.clone(), note.title.clone()))
+                    .collect();
                 let paths = notes.into_iter().map(|note| note.path);
                 *session.resolver.borrow_mut() = Resolver::new(paths);
             }
@@ -1466,6 +1542,7 @@ fn save_note(state: &Rc<State>) {
         Some(name) => {
             state.dirty.set(false);
             state.status.set_text(&format!("Saved {name}"));
+            refresh_titles(state);
         }
         None => state.status.set_text("Nothing to save"),
     }
@@ -1633,6 +1710,9 @@ fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
         }
         if structural {
             refresh_tree(&drain_state);
+        } else {
+            // An external edit can rename the note without moving its file.
+            refresh_titles(&drain_state);
         }
         gtk::glib::ControlFlow::Continue
     });

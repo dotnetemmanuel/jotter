@@ -75,6 +75,7 @@ pub fn reindex_note(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
     let record = build_record(vault, rel, &text)?;
     let note_id = index.upsert_note(&record)?;
     index.set_links(note_id, &outbound_links(&text))?;
+    index.set_tags(note_id, &note_tags(&text))?;
     Ok(())
 }
 
@@ -88,6 +89,24 @@ pub fn reindex_note(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
 pub fn reindex_note_resolved(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
     reindex_note(vault, index, rel)?;
     resolve_links(index)
+}
+
+/// Every tag of a note: the frontmatter list first, then inline `#tag` uses.
+///
+/// Both sources are lowercased and deduplicated, so a note declaring a tag it
+/// also uses inline counts once.
+fn note_tags(text: &str) -> Vec<String> {
+    let mut tags: Vec<String> = jotter_parser::frontmatter::parse(text)
+        .tags
+        .iter()
+        .map(|tag| tag.to_lowercase())
+        .collect();
+    for tag in jotter_parser::tags::scan(text) {
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
 }
 
 /// Outbound wikilinks of a note, stored under their raw targets.
@@ -136,7 +155,7 @@ fn build_record(vault: &Vault, rel: &Path, text: &str) -> Result<NoteRecord> {
         title: extract_title(text, rel),
         mtime,
         size,
-        frontmatter: None,
+        frontmatter: jotter_parser::frontmatter::parse(text).raw,
         body: text.to_owned(),
     })
 }

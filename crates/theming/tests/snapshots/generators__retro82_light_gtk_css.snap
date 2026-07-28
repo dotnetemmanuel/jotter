@@ -52,6 +52,15 @@ paned > separator {
   background-color: #d8c49a;
 }
 
+.tree-title {
+  color: #5f7d84;
+  font-size: 14px;
+}
+
+.sidebar listview > row:selected .tree-title {
+  color: alpha(#f6e8cd, 0.7);
+}
+
 .sidebar listview > row:selected {
   background-color: #d9762b;
   color: #f6e8cd;

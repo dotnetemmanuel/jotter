@@ -3,6 +3,8 @@
 //! highlighting driven by the active theme, and a source-line to heading-anchor
 //! map for scroll synchronization between the editor and the preview.
 
+pub mod frontmatter;
+pub mod tags;
 pub mod wikilink;
 
 use comrak::nodes::{AstNode, NodeValue};

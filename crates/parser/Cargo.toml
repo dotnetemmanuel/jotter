@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 comrak = "0.53.0"
+gray_matter = { version = "0.3.2", features = ["json", "toml"] }
 jotter-theming = { version = "0.1.0", path = "../theming" }
 syntect = "5.3.0"
 
