@@ -10,14 +10,14 @@ body {
   margin: 0;
   padding: 2.5rem 2.75rem;
   background: #f6e8cd;
-  color: #0a2138;
+  color: #24404f;
   font-family: Inter, sans-serif;
   font-size: 15px;
   line-height: 1.6;
 }
 
 h1, h2, h3, h4, h5, h6 {
-  color: #0a2138;
+  color: #24404f;
   line-height: 1.1;
   font-weight: 800;
   letter-spacing: -0.015em;
