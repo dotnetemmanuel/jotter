@@ -10,7 +10,8 @@ before touching any v1.5 feature.
 
 ## Status (2026-07-28)
 
-Phases 0 through 3 are complete. Next up is Phase 4 (backlinks, tags, frontmatter).
+Phases 0 through 3 are complete. Phase 4 is in progress: frontmatter, tags,
+backlinks, and the tag page have landed; the broken-link report is left.
 Phase 3 was split: wikilinks landed first because they carry the correctness risk
 and are testable without a GUI, and the pickers share a widget with search.
 
@@ -300,9 +301,24 @@ any conflict handling if the file changed on disk under an unsaved buffer.
 
 ---
 
-## Phase 4: backlinks, tags, frontmatter (target: 3 to 4 days)
+## Phase 4: backlinks, tags, frontmatter (in progress)
 
-Tasks:
+Shipped so far, on branch `phase-4-backlinks`:
+- `crates/parser/src/frontmatter.rs` over `gray_matter` (YAML, TOML, JSON) and
+  `crates/parser/src/tags.rs` for inline `#tag`, which reuses `dead_ranges` so
+  code, headings, and URL fragments are not tags. Both feed `Index::set_tags`.
+- Backlinks strip under the editor, showing the line each link sits on. The
+  results list moved to `results.rs`, shared by search, backlinks, and tags.
+- Tag page (`Ctrl+Shift+T`): tags alphabetically with counts, then the notes
+  carrying one. Escape and a back arrow step one level at a time.
+- Off-plan but requested: folder rename and delete with a confirming dialog, a
+  window title carrying the open note, and tree selection that survives a
+  rebuild (the watcher rebuilds again after any in-app change).
+
+Left: the broken-link report, as a palette command filling a report page and a
+status-bar count that opens it, hidden when zero.
+
+Original tasks:
 - Backlinks panel below the preview: `SELECT src_note_id FROM links WHERE
   dst_path = ? AND resolved = 1`, show each linker with a snippet of the linking line.
 - Broken-link report: `SELECT dst_path, count(*) FROM links WHERE resolved = 0
