@@ -5,6 +5,8 @@
 
 mod config;
 mod links;
+mod picker;
+mod switcher;
 mod title;
 mod tree;
 mod vault_session;
@@ -51,6 +53,9 @@ const DRAIN_MS: u64 = 200;
 
 /// How many near matches to offer when a wikilink target does not exist.
 const MAX_SUGGESTIONS: usize = 5;
+
+/// How many rows the picker shows at most, however many notes matched.
+const MAX_PICKER_ROWS: usize = 50;
 
 /// Fallback document shown when no path is given or a read fails.
 const SAMPLE_MARKDOWN: &str = "# jotter\n\nA native GTK4 markdown vault.\n\n## Toggle\n\nPress Ctrl+E to switch between edit and preview.\n\n## Code\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
@@ -102,6 +107,8 @@ struct State {
     dirty: Cell<bool>,
     /// Path open in single-file mode, absent in vault mode and for the sample.
     single_file: RefCell<Option<PathBuf>>,
+    /// Layer the picker panel is added to, above the editor and preview.
+    overlay: gtk::Overlay,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -237,6 +244,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         pending_anchor: RefCell::new(None),
         dirty: Cell::new(false),
         single_file: RefCell::new(None),
+        overlay: gtk::Overlay::new(),
     });
 
     // Load content per the resolved startup target, opening a vault if requested.
@@ -252,6 +260,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     wire_preview_links(&state);
     wire_editor_links(&state);
     wire_save(app, &state);
+    wire_quick_open(app, &state);
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
@@ -267,6 +276,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     root_box.append(&gtk::Separator::new(Orientation::Horizontal));
     root_box.append(&status);
     paned.set_vexpand(true);
+    state.overlay.set_child(Some(&root_box));
 
     let header = HeaderBar::new();
 
@@ -275,7 +285,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .title("jotter")
         .default_width(1400)
         .default_height(900)
-        .child(&root_box)
+        .child(&state.overlay)
         .build();
     window.set_titlebar(Some(&header));
     wire_preview_zoom(&window, &state);
@@ -417,6 +427,7 @@ fn load_note(state: &Rc<State>, rel: &Path) {
         let root = session.vault.root().to_path_buf();
         let mut config = state.config.borrow_mut();
         config.set_last_active(&root, rel);
+        config.push_recent_note(&root, rel);
         config.save();
     }
 }
@@ -734,6 +745,83 @@ fn toggle_mode(state: &Rc<State>) {
         render_into_preview(state);
         state.stack.set_visible_child_name(PAGE_PREVIEW);
     }
+}
+
+/// Install a Ctrl+O accelerator that opens the quick switcher.
+fn wire_quick_open(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("quick-open", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| open_switcher(&open_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.quick-open", &["<Primary>o"]);
+}
+
+/// Opens the quick switcher: recents when empty, fuzzy over the vault as you type.
+fn open_switcher(state: &Rc<State>) {
+    let Some(notes) = switcher_candidates(state) else {
+        return;
+    };
+    let recents = recent_notes(state);
+
+    let activate = Rc::clone(state);
+    let restore = Rc::clone(state);
+    picker::open(
+        &state.overlay,
+        "Go to note",
+        "",
+        move |query| switcher::rows(query, &notes, &recents, MAX_PICKER_ROWS),
+        move |key| {
+            let rel = PathBuf::from(key);
+            load_note(&activate, &rel);
+            select_in_tree(&activate, &rel);
+        },
+        move || restore.editor.grab_focus(),
+    );
+}
+
+/// Every note the switcher can offer, from the index, falling back to the vault
+/// while a first index build is still running.
+fn switcher_candidates(state: &Rc<State>) -> Option<Vec<switcher::Candidate>> {
+    let session = state.session.borrow();
+    let session = session.as_ref()?;
+    let indexed: Vec<switcher::Candidate> = session
+        .index
+        .all_notes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|note| switcher::Candidate {
+            path: note.path,
+            title: note.title,
+        })
+        .collect();
+    if !indexed.is_empty() {
+        return Some(indexed);
+    }
+    Some(
+        session
+            .vault
+            .notes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|note| switcher::Candidate {
+                title: stem_of(&note.rel_path),
+                path: note.rel_path.to_string_lossy().into_owned(),
+            })
+            .collect(),
+    )
+}
+
+/// Recently opened notes of the active vault, most-recent-first.
+fn recent_notes(state: &Rc<State>) -> Vec<String> {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return Vec::new();
+    };
+    state
+        .config
+        .borrow()
+        .recent_notes_for(session.vault.root())
+        .to_vec()
 }
 
 /// Install a Ctrl+B accelerator that toggles the sidebar visibility.

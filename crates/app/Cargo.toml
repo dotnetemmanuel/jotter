@@ -10,6 +10,7 @@ jotter-editor = { version = "0.1.0", path = "../editor" }
 jotter-index = { version = "0.1.0", path = "../index" }
 jotter-parser = { version = "0.1.0", path = "../parser" }
 jotter-preview = { version = "0.1.0", path = "../preview" }
+jotter-search = { version = "0.1.0", path = "../search" }
 jotter-theming = { version = "0.1.0", path = "../theming" }
 jotter-vault = { version = "0.1.0", path = "../vault" }
 serde = { version = "1.0.229", features = ["derive"] }

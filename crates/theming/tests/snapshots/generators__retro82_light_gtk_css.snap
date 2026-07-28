@@ -1,5 +1,6 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 34
 expression: "resolve(\"retro82\", Mode::Light).to_gtk_css()"
 ---
 /* retro82 light */
@@ -117,11 +118,22 @@ entry {
   border-bottom: 2px solid #0a2138;
   border-radius: 0;
   box-shadow: none;
+  outline: none;
   padding: 6px 2px;
+}
+
+entry:focus-within, entry:hover, entry:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 entry:focus-within {
   border-bottom-color: #d9762b;
+}
+
+entry > text, entry > text:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 popover > contents {
@@ -130,6 +142,51 @@ popover > contents {
   border: 2px solid #0a2138;
   border-radius: 3px;
   box-shadow: none;
+}
+
+.picker-scrim {
+  background-color: alpha(#f6e8cd, 0.45);
+}
+
+.picker {
+  background-color: #ecdcb8;
+  color: #0a2138;
+  border: 2px solid #0a2138;
+  border-radius: 3px;
+  padding: 8px 10px 6px 10px;
+}
+
+.picker entry {
+  font-size: 19px;
+  padding-bottom: 8px;
+}
+
+.picker listview {
+  background-color: transparent;
+  color: #0a2138;
+  margin-top: 6px;
+}
+
+.picker listview > row {
+  border-radius: 3px;
+  padding: 4px 8px;
+}
+
+.picker listview > row:hover {
+  background-color: #d8c49a;
+}
+
+.picker listview > row:selected {
+  background-color: #d9762b;
+  color: #f6e8cd;
+}
+
+.picker-detail {
+  color: #5f7d84;
+}
+
+.picker listview > row:selected .picker-detail {
+  color: alpha(#f6e8cd, 0.65);
 }
 
 tooltip {

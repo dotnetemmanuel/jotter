@@ -1,5 +1,6 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 44
 expression: "resolve(\"event-horizon\", Mode::Dark).to_gtk_css()"
 ---
 /* Event Horizon dark */
@@ -117,11 +118,22 @@ entry {
   border-bottom: 2px solid #fadad1;
   border-radius: 0;
   box-shadow: none;
+  outline: none;
   padding: 6px 2px;
+}
+
+entry:focus-within, entry:hover, entry:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 entry:focus-within {
   border-bottom-color: #ee64ac;
+}
+
+entry > text, entry > text:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 popover > contents {
@@ -130,6 +142,51 @@ popover > contents {
   border: 2px solid #fadad1;
   border-radius: 3px;
   box-shadow: none;
+}
+
+.picker-scrim {
+  background-color: alpha(#1c1e26, 0.45);
+}
+
+.picker {
+  background-color: #232530;
+  color: #fadad1;
+  border: 2px solid #fadad1;
+  border-radius: 3px;
+  padding: 8px 10px 6px 10px;
+}
+
+.picker entry {
+  font-size: 19px;
+  padding-bottom: 8px;
+}
+
+.picker listview {
+  background-color: transparent;
+  color: #fadad1;
+  margin-top: 6px;
+}
+
+.picker listview > row {
+  border-radius: 3px;
+  padding: 4px 8px;
+}
+
+.picker listview > row:hover {
+  background-color: #2e303e;
+}
+
+.picker listview > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.picker-detail {
+  color: #6c6f93;
+}
+
+.picker listview > row:selected .picker-detail {
+  color: alpha(#1c1e26, 0.65);
 }
 
 tooltip {

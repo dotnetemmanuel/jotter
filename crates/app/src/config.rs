@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 /// How many recent vaults to keep. Older entries drop off the end.
 const MAX_RECENTS: usize = 20;
 
+/// How many recently opened notes to keep per vault, for the quick switcher.
+const MAX_RECENT_NOTES: usize = 10;
+
 /// Persisted global configuration for jotter.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -18,6 +21,9 @@ pub struct Config {
     /// Last-active note (vault-relative path) keyed by absolute vault root.
     #[serde(default)]
     pub last_active: BTreeMap<String, String>,
+    /// Recently opened notes, most-recent-first, keyed by absolute vault root.
+    #[serde(default)]
+    pub recent_notes: BTreeMap<String, Vec<String>>,
 }
 
 impl Config {
@@ -92,6 +98,23 @@ impl Config {
         let key = root.to_string_lossy();
         self.last_active.get(key.as_ref()).map(PathBuf::from)
     }
+
+    /// Records `rel` as the most recently opened note of vault `root`.
+    pub fn push_recent_note(&mut self, root: &Path, rel: &Path) {
+        let key = root.to_string_lossy().into_owned();
+        let value = rel.to_string_lossy().into_owned();
+        let entry = self.recent_notes.entry(key).or_default();
+        *entry = capped(std::mem::take(entry), value, MAX_RECENT_NOTES);
+    }
+
+    /// Recently opened notes of `root`, most-recent-first.
+    #[must_use]
+    pub fn recent_notes_for(&self, root: &Path) -> &[String] {
+        let key = root.to_string_lossy();
+        self.recent_notes
+            .get(key.as_ref())
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 /// The absolute config file path under the user config dir.
@@ -104,6 +127,10 @@ fn config_path() -> PathBuf {
 
 /// Pure recents update: prepend `key`, drop an earlier duplicate, cap the length.
 fn push_recent(existing: Vec<String>, key: String) -> Vec<String> {
+    capped(existing, key, MAX_RECENTS)
+}
+
+fn capped(existing: Vec<String>, key: String, cap: usize) -> Vec<String> {
     let mut out = Vec::with_capacity(existing.len() + 1);
     for entry in existing {
         if entry != key {
@@ -112,13 +139,58 @@ fn push_recent(existing: Vec<String>, key: String) -> Vec<String> {
     }
     // Prepend the key (moved, not cloned) so it becomes the most-recent entry.
     out.insert(0, key);
-    out.truncate(MAX_RECENTS);
+    out.truncate(cap);
     out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RECENTS, push_recent};
+    use super::{Config, MAX_RECENTS, MAX_RECENT_NOTES, push_recent};
+    use std::path::Path;
+
+    #[test]
+    fn recent_notes_are_most_recent_first() {
+        let mut config = Config::default();
+        config.push_recent_note(Path::new("/vault"), Path::new("a.md"));
+        config.push_recent_note(Path::new("/vault"), Path::new("b.md"));
+        assert_eq!(config.recent_notes_for(Path::new("/vault")), ["b.md", "a.md"]);
+    }
+
+    #[test]
+    fn reopening_a_note_moves_it_to_the_front() {
+        let mut config = Config::default();
+        for name in ["a.md", "b.md", "a.md"] {
+            config.push_recent_note(Path::new("/vault"), Path::new(name));
+        }
+        assert_eq!(config.recent_notes_for(Path::new("/vault")), ["a.md", "b.md"]);
+    }
+
+    #[test]
+    fn recent_notes_are_capped() {
+        let mut config = Config::default();
+        for n in 0..=MAX_RECENT_NOTES {
+            config.push_recent_note(Path::new("/vault"), Path::new(&format!("{n}.md")));
+        }
+        assert_eq!(
+            config.recent_notes_for(Path::new("/vault")).len(),
+            MAX_RECENT_NOTES
+        );
+    }
+
+    #[test]
+    fn recent_notes_are_per_vault() {
+        let mut config = Config::default();
+        config.push_recent_note(Path::new("/one"), Path::new("a.md"));
+        config.push_recent_note(Path::new("/two"), Path::new("b.md"));
+        assert_eq!(config.recent_notes_for(Path::new("/one")), ["a.md"]);
+        assert_eq!(config.recent_notes_for(Path::new("/two")), ["b.md"]);
+    }
+
+    #[test]
+    fn an_unknown_vault_has_no_recent_notes() {
+        let config = Config::default();
+        assert!(config.recent_notes_for(Path::new("/nowhere")).is_empty());
+    }
 
     #[test]
     fn push_prepends_new_entry() {

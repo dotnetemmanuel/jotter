@@ -36,9 +36,20 @@ button.destructive-action:hover {{\n  background-color: {danger};\n}}\n\n\
 windowcontrols button, windowcontrols button.titlebutton {{\n  background-color: transparent;\n  background-image: none;\n  border: none;\n  box-shadow: none;\n  color: {text};\n}}\n\n\
 windowcontrols button:hover, windowcontrols button.titlebutton:hover {{\n  background-color: {overlay};\n  background-image: none;\n  color: {text};\n  border-radius: {r}px;\n}}\n\n\
 windowcontrols button image, windowcontrols button:hover image {{\n  background: none;\n  background-color: transparent;\n  background-image: none;\n  box-shadow: none;\n  color: {text};\n}}\n\n\
-entry {{\n  background-color: transparent;\n  background-image: none;\n  color: {text};\n  border: none;\n  border-bottom: {bw}px solid {border};\n  border-radius: 0;\n  box-shadow: none;\n  padding: 6px 2px;\n}}\n\n\
+entry {{\n  background-color: transparent;\n  background-image: none;\n  color: {text};\n  border: none;\n  border-bottom: {bw}px solid {border};\n  border-radius: 0;\n  box-shadow: none;\n  outline: none;\n  padding: 6px 2px;\n}}\n\n\
+entry:focus-within, entry:hover, entry:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
 entry:focus-within {{\n  border-bottom-color: {accent};\n}}\n\n\
+entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
+.picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.picker {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  padding: 8px 10px 6px 10px;\n}}\n\n\
+.picker entry {{\n  font-size: {picker_size}px;\n  padding-bottom: 8px;\n}}\n\n\
+.picker listview {{\n  background-color: transparent;\n  color: {text};\n  margin-top: 6px;\n}}\n\n\
+.picker listview > row {{\n  border-radius: {r}px;\n  padding: 4px 8px;\n}}\n\n\
+.picker listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.picker listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
+.picker-detail {{\n  color: {muted};\n}}\n\n\
+.picker listview > row:selected .picker-detail {{\n  color: alpha({bg}, 0.65);\n}}\n\n\
 tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n}}\n",
             name = self.scheme_name(),
             bg = c.background,
@@ -48,8 +59,10 @@ tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px s
             accent = c.accent,
             border = c.border,
             danger = c.danger,
+            muted = c.muted,
             ui_font = t.ui_font,
             size = t.font_size,
+            picker_size = t.font_size + 4,
         )
     }
 }
