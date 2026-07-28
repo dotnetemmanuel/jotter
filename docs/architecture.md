@@ -48,6 +48,11 @@ and command dispatcher. The binary only constructs the GTK Application and hands
 - Toggle to preview -> `parser` (frontmatter strip -> wikilink rewrite -> comrak ->
   syntect) produces HTML + a line-to-heading anchor map -> `preview` loads it with
   injected CSS and scrolls to the anchor nearest the caret line.
+- Follow a link -> `preview` reports the clicked uri instead of navigating ->
+  `jotter-note:` opens that note, `jotter-new:` offers near matches or creates it,
+  anything else goes to the system browser. Wikilinks resolve through an in-memory
+  stem and path map the app rebuilds from the index on every structural change, so
+  rendering never queries the database per link.
 - External change -> `notify` debounced event -> `index` incremental reindex ->
   affected UI panels refresh (tree, backlinks, tags).
 
@@ -78,9 +83,10 @@ CREATE TABLE tags (
 
 CREATE TABLE links (
   src_note_id  INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-  dst_path     TEXT NOT NULL,          -- resolved relative path, or raw target if unresolved
+  target       TEXT NOT NULL,          -- link target exactly as written in the note
+  dst_path     TEXT NOT NULL,          -- resolved relative path, or the target if unresolved
   resolved     INTEGER NOT NULL,       -- 0 or 1
-  PRIMARY KEY (src_note_id, dst_path)
+  PRIMARY KEY (src_note_id, target)
 );
 
 CREATE INDEX idx_links_dst ON links(dst_path);
@@ -95,8 +101,19 @@ CREATE VIRTUAL TABLE notes_fts USING fts5(
 ```
 
 Key queries:
-- Backlinks: `SELECT src_note_id FROM links WHERE dst_path = ? AND resolved = 1`.
+- Backlinks: `SELECT DISTINCT src_note_id FROM links WHERE dst_path = ? AND resolved = 1`.
 - Broken links: `SELECT dst_path, count(*) FROM links WHERE resolved = 0 GROUP BY dst_path`.
+
+`target` is never rewritten, so re-resolution always asks the same question a fresh
+scan of the note would: a stem stays a stem even after it once matched a path.
+Storing only the resolved path narrows it, and a stem whose winning note is deleted
+then goes broken instead of falling through to the note still on disk. Indexing
+writes targets unresolved; the resolve pass fills in `dst_path` and `resolved`. It
+runs once after a full index (not per note, which would be quadratic) and after
+every incremental reindex, since an edit can add or remove links.
+
+Two targets in one note can resolve to the same note (`[[standup]]` and
+`[[work/standup]]`), hence the `DISTINCT` in the backlinks query.
 
 Migrations are numbered `NNN_description.sql` and applied in order on connection open.
 A `schema_version` pragma or a meta table tracks the applied migration number.

@@ -8,9 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use jotter_index::{Index, IndexError, NoteRecord};
+use jotter_index::{Index, IndexError, LinkRecord, NoteRecord};
 use jotter_vault::Vault;
 
+use crate::links::Resolver;
 use crate::title::extract_title;
 
 /// The per-vault directory that holds the index database.
@@ -72,7 +73,42 @@ pub fn reindex_note(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
         .read_note(rel)
         .with_context(|| format!("read note {}", rel.display()))?;
     let record = build_record(vault, rel, &text)?;
-    index.upsert_note(&record)?;
+    let note_id = index.upsert_note(&record)?;
+    index.set_links(note_id, &outbound_links(&text))?;
+    Ok(())
+}
+
+/// Reindexes one note and settles its link resolution.
+///
+/// The incremental counterpart to [`reindex_note`], which leaves links
+/// unresolved because a full index resolves once at the end instead of per note.
+///
+/// # Errors
+/// Returns an error if the reindex or the resolve pass fails.
+pub fn reindex_note_resolved(vault: &Vault, index: &Index, rel: &Path) -> Result<()> {
+    reindex_note(vault, index, rel)?;
+    resolve_links(index)
+}
+
+/// Outbound wikilinks of a note, stored under their raw targets.
+///
+/// Resolution is deliberately deferred to [`resolve_links`]: during a full index
+/// a note can link to one that has not been indexed yet.
+fn outbound_links(text: &str) -> Vec<LinkRecord> {
+    jotter_parser::wikilink::scan(text)
+        .into_iter()
+        .map(|link| LinkRecord::unresolved(link.target))
+        .collect()
+}
+
+/// Resolves every link target in `index` against the notes it now contains.
+///
+/// # Errors
+/// Returns an error if the index cannot be read or updated.
+pub fn resolve_links(index: &Index) -> Result<()> {
+    let paths = index.all_notes()?.into_iter().map(|note| note.path);
+    let resolver = Resolver::new(paths);
+    index.reresolve_links(|target| resolver.lookup(target))?;
     Ok(())
 }
 
@@ -163,6 +199,11 @@ pub fn reconcile_in_thread<F: Fn(IndexProgress)>(root: &Path, report: &F) -> Res
                 let _ = index.remove_note_by_path(&note.path);
             }
         }
+    }
+
+    // Only now does the index know every note, so link targets can be resolved.
+    if let Err(err) = resolve_links(&index) {
+        eprintln!("jotter: could not resolve links: {err}");
     }
 
     report(IndexProgress::Done { total });

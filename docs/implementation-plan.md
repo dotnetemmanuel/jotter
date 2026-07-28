@@ -10,8 +10,9 @@ before touching any v1.5 feature.
 
 ## Status (2026-07-27)
 
-Phases 0 through 2.5 are complete and on `main`. Next up is Phase 3 (wikilinks
-and search).
+Phases 0 through 3a are complete. Next up is Phase 3b (search and the pickers).
+Phase 3 was split: wikilinks landed first because they carry the correctness risk
+and are testable without a GUI, and the pickers share a widget with search.
 
 Phase 2 shipped `crates/vault` (enumerate with ignore rules, atomic IO,
 delete-to-trash, debounced `notify` watcher), `crates/index` (SQLite, migrations
@@ -236,35 +237,62 @@ Acceptance:
 
 ---
 
-## Phase 3: wikilinks and search (target: 1 week)
+## Phase 3a: wikilinks (done)
 
-Goal: linking and finding notes.
+Goal: links between notes that resolve, render, and can be followed.
+
+Shipped:
+- `crates/parser/src/wikilink.rs`: one code-aware `scan` reporting the byte range,
+  target, heading, and alias of every `[[...]]`. Code-awareness is a hybrid, so
+  indented code needs no hand-rolled detection: comrak block source positions mark
+  code blocks, frontmatter, and raw HTML as opaque, and the scanner tracks inline
+  backtick runs itself. The same spans drive rendering, indexing, and click
+  handling, so those three can never disagree about where a link is.
+- `render` takes a `LinkResolver`, so `crates/parser` still has no dependency on
+  `crates/index` and tests resolve through a closure. Links are rewritten to
+  markdown links carrying `jotter-note:` or `jotter-new:`, and unresolved ones are
+  styled by scheme in the preview CSS.
+- Resolution lives in `crates/app/src/links.rs`: a stem and path map rebuilt from
+  the index on every structural change. Bare stems match anywhere in the vault,
+  case-insensitively, a `/` in the target names a vault-relative path, and a stem
+  collision resolves to the lexicographically first path.
+- `links` rows are written by `reindex_note` under their raw targets and resolved
+  by a pass that runs after a full index and after each structural change, so a
+  note linking to one indexed later is not stuck broken.
+- Following: a plain click in the preview, `Ctrl+Click` in the editor. A broken
+  target with near matches (edit distance over separator-insensitive text) opens a
+  chooser, and picking a match rewrites the `[[...]]` in the source; with no near
+  match the note is created beside its source and opened. External links now go to
+  the system browser instead of navigating the preview away from the note.
+
+## Phase 3b: search and pickers (target: 4 to 5 days)
+
+Goal: finding notes.
 
 Tasks:
-- Wikilink preprocess in `crates/parser`: scan for `[[target]]`, `[[target|alias]]`,
-  `[[target#heading]]`. Must be code-aware: skip inside fenced blocks and inline
-  code. Resolve target against the index (case-insensitive, first match wins).
-  Unresolved links get `class="broken-link"`. Rewrite to standard markdown links
-  before comrak.
-- Populate `links` table on index: resolved relative path or raw target, plus the
-  `resolved` flag.
-- FTS5: populate `notes_fts` (title, body) with `unicode61 remove_diacritics 2`.
-  Background build on first open of a large vault, with progress. Never block UI.
-- `Ctrl+Click` follows a wikilink. `[[` opens an autocomplete popover fed from the
-  index (titles and paths).
+- `[[` opens an autocomplete popover fed from the index (titles and paths).
 - Quick switcher (`Ctrl+O`): fuzzy over note title and path.
 - Command palette (`Ctrl+P`): fuzzy over commands and notes together.
 - Full-text search (`Ctrl+Shift+F`): FTS5-backed, side panel, snippet highlights.
+  `notes_fts` is already populated on every upsert; the work here is querying it,
+  ranking, and rendering snippets, plus progress on a first large-vault build.
+- One shared fuzzy list widget behind all three surfaces, with a real subsequence
+  matcher (the wikilink near-match check is edit distance, a different job).
 
 Acceptance:
-- Typing `[[` autocompletes from the index; following a link opens the target.
-- Broken links render with the broken-link class in preview.
+- Typing `[[` autocompletes from the index.
 - Quick switcher, command palette, and FTS search all return correct results on a
   multi-hundred-note fixture vault.
-- Commit: "phase 3: wikilinks, autocomplete, quick switcher, command palette, FTS".
+- Commit: "phase 3b: autocomplete, quick switcher, command palette, FTS".
 
 Pitfall guard: never rewrite wikilinks inside code fences or inline code. Preprocess
 with code-context awareness, not a blind document-wide regex.
+
+Saving landed alongside phase 3a (it was missing entirely: `vault.write_note` had
+no caller). `Ctrl+S` writes through the vault and reindexes, or writes the file
+directly in single-file mode, gated on a dirty flag. Switching notes and closing
+the window both save first, silently. Still absent: any autosave on a timer, and
+any conflict handling if the file changed on disk under an unsaved buffer.
 
 ---
 

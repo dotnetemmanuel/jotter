@@ -1,5 +1,6 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 54
 expression: "resolve(\"event-horizon\", Mode::Dark).to_preview_css()"
 ---
 /* Event Horizon dark */
@@ -46,7 +47,7 @@ a {
   text-underline-offset: 2px;
 }
 
-a.broken-link {
+a.broken-link, a[href^="jotter-new:"] {
   color: #6c6f93;
   text-decoration: underline dashed;
 }

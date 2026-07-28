@@ -1,6 +1,11 @@
 //! Integration test for the heading anchor map produced by `render`.
 
 use jotter_parser::render;
+
+/// Resolves nothing: these fixtures carry no wikilinks.
+fn no_links(_: &str) -> Option<String> {
+    None
+}
 use jotter_theming::Code;
 
 const FIXTURE: &str = include_str!("fixtures/sample.md");
@@ -22,7 +27,7 @@ fn test_code() -> Code {
 
 #[test]
 fn headings_map_source_lines_levels_and_anchors() {
-    let rendered = render(FIXTURE, &test_code());
+    let rendered = render(FIXTURE, &test_code(), &no_links);
 
     let headings = &rendered.headings;
     assert_eq!(headings.len(), 3, "three headings expected");
@@ -56,7 +61,7 @@ fn headings_map_source_lines_levels_and_anchors() {
 
 #[test]
 fn render_highlights_fenced_code_with_theme_background() {
-    let rendered = render(FIXTURE, &test_code());
+    let rendered = render(FIXTURE, &test_code(), &no_links);
     // The custom syntect theme background should appear on the code block.
     assert!(
         rendered.html.contains("background-color:#1e1e1e"),

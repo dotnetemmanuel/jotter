@@ -1,5 +1,6 @@
 ---
 source: crates/theming/tests/generators.rs
+assertion_line: 29
 expression: "resolve(\"retro82\", Mode::Dark).to_preview_css()"
 ---
 /* retro82 dark */
@@ -46,7 +47,7 @@ a {
   text-underline-offset: 2px;
 }
 
-a.broken-link {
+a.broken-link, a[href^="jotter-new:"] {
   color: #6d8f8a;
   text-decoration: underline dashed;
 }
