@@ -20,9 +20,11 @@ impl Theme {
         format!(
             "/* {name} */\n\
 window {{\n  background-color: {bg};\n  color: {text};\n  font-family: {ui_font};\n  font-size: {size}px;\n}}\n\n\
-headerbar {{\n  background-color: {surface};\n  background-image: none;\n  color: {text};\n  border-bottom: {bw}px solid {border};\n  box-shadow: none;\n}}\n\n\
-.sidebar {{\n  background-color: {surface};\n  border-right: {bw}px solid {border};\n}}\n\n\
-.sidebar listview {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
+headerbar {{\n  background-color: {bg};\n  background-image: none;\n  color: {text};\n  border-bottom: 1px solid {overlay};\n  box-shadow: none;\n}}\n\n\
+separator {{\n  background-color: {overlay};\n  min-height: 1px;\n  min-width: 1px;\n}}\n\n\
+paned > separator {{\n  background-color: {overlay};\n  background-image: none;\n  min-width: 1px;\n  min-height: 1px;\n}}\n\n\
+.sidebar {{\n  background-color: {bg};\n}}\n\n\
+.sidebar listview {{\n  background-color: transparent;\n  color: {text};\n  padding-top: 6px;\n}}\n\n\
 .sidebar listview > row {{\n  border-radius: {r}px;\n  padding: 3px 8px;\n  margin: 1px 6px;\n}}\n\n\
 .sidebar listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
@@ -40,8 +42,19 @@ entry {{\n  background-color: transparent;\n  background-image: none;\n  color: 
 entry:focus-within, entry:hover, entry:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
 entry:focus-within {{\n  border-bottom-color: {accent};\n}}\n\n\
 entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
+row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.search-results {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
+.search-results > row {{\n  border-radius: {r}px;\n  padding: 1px 6px;\n  margin: 0 6px;\n}}\n\n\
+.search-results > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.search-results > row:selected {{\n  background-color: {overlay};\n  color: {text};\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.search-heading {{\n  margin-top: 14px;\n  padding: 2px 2px 4px 2px;\n  border-bottom: 1px solid alpha({border}, 0.25);\n}}\n\n\
+.search-results > row:first-child .search-heading {{\n  margin-top: 2px;\n}}\n\n\
+.search-name {{\n  font-weight: bold;\n}}\n\n\
+.search-folder {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.search-count {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.search-snippet {{\n  color: {muted};\n  margin-left: 5px;\n  padding: 1px 0 1px 10px;\n  border-left: 1px solid alpha({border}, 0.18);\n}}\n\n\
 .completion listbox {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
 .completion listbox > row {{\n  border-radius: {r}px;\n  padding: 2px 8px;\n}}\n\n\
 .completion listbox > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
@@ -66,6 +79,7 @@ tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px s
             ui_font = t.ui_font,
             size = t.font_size,
             picker_size = t.font_size + 4,
+            small = t.font_size.saturating_sub(1),
         )
     }
 }

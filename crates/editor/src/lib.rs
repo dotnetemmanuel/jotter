@@ -271,6 +271,17 @@ impl Editor {
         }
     }
 
+    /// Put the caret on a 0-based line and scroll it into view.
+    pub fn focus_line(&self, line: i32) {
+        let last = self.buffer.line_count() - 1;
+        let Some(iter) = self.buffer.iter_at_line(line.clamp(0, last.max(0))) else {
+            return;
+        };
+        self.buffer.place_cursor(&iter);
+        self.view
+            .scroll_to_mark(&self.buffer.get_insert(), 0.0, true, 0.0, 0.3);
+    }
+
     /// Re-apply a theme (for example after a light/dark switch): re-register and
     /// set the style scheme on the buffer. The font is mode-independent, so it is
     /// left as applied at construction to avoid stacking display providers.

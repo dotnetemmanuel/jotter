@@ -277,15 +277,32 @@ fn step(selection: &SingleSelection, list_view: &ListView, delta: i32) {
 
 /// Wraps the matched characters of `label` in bold, escaping the rest for Pango.
 pub fn highlight(label: &str, positions: &[usize]) -> String {
+    marked(label, positions, None)
+}
+
+/// Bold plus a color on the matched characters, for surfaces where bold alone
+/// does not stand out.
+pub fn highlight_colored(label: &str, positions: &[usize], color: &str) -> String {
+    marked(label, positions, Some(color))
+}
+
+fn marked(label: &str, positions: &[usize], color: Option<&str>) -> String {
     let mut out = String::with_capacity(label.len());
     let mut bold = false;
     for (offset, character) in label.char_indices() {
         let matched = positions.binary_search(&offset).is_ok();
         if matched && !bold {
-            out.push_str("<b>");
+            match color {
+                Some(color) => {
+                    out.push_str("<b><span foreground=\"");
+                    out.push_str(color);
+                    out.push_str("\">");
+                }
+                None => out.push_str("<b>"),
+            }
             bold = true;
         } else if !matched && bold {
-            out.push_str("</b>");
+            out.push_str(close_tag(color));
             bold = false;
         }
         match character {
@@ -296,14 +313,34 @@ pub fn highlight(label: &str, positions: &[usize]) -> String {
         }
     }
     if bold {
-        out.push_str("</b>");
+        out.push_str(close_tag(color));
     }
     out
 }
 
+fn close_tag(color: Option<&str>) -> &'static str {
+    if color.is_some() { "</span></b>" } else { "</b>" }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::highlight;
+    use super::{highlight, highlight_colored};
+
+    #[test]
+    fn a_colored_highlight_carries_the_color_and_the_bold() {
+        assert_eq!(
+            highlight_colored("plan", &[0, 1], "#ff8800"),
+            "<b><span foreground=\"#ff8800\">pl</span></b>an"
+        );
+    }
+
+    #[test]
+    fn a_colored_highlight_closes_a_trailing_run() {
+        assert_eq!(
+            highlight_colored("pl", &[0, 1], "#ff8800"),
+            "<b><span foreground=\"#ff8800\">pl</span></b>"
+        );
+    }
 
     #[test]
     fn plain_text_when_nothing_matched() {

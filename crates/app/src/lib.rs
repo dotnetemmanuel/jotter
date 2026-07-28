@@ -8,6 +8,8 @@ mod complete;
 mod config;
 mod links;
 mod picker;
+mod search;
+mod search_panel;
 mod switcher;
 mod title;
 mod tree;
@@ -46,6 +48,17 @@ const APP_ID: &str = "dev.jotter.Jotter";
 const PAGE_EDIT: &str = "edit";
 /// Stack page name for the preview.
 const PAGE_PREVIEW: &str = "preview";
+
+/// Sidebar page names: the file tree, and the search panel.
+const PAGE_TREE: &str = "tree";
+const PAGE_SEARCH: &str = "search";
+
+/// Debounce before a typed query hits the index, in milliseconds.
+const SEARCH_DEBOUNCE_MS: u64 = 120;
+
+/// How many notes a search returns, and how many lines are shown per note.
+const MAX_SEARCH_NOTES: usize = 50;
+const MAX_SEARCH_LINES: usize = 3;
 
 /// Re-render debounce for an already-open preview, in milliseconds.
 const DEBOUNCE_MS: u64 = 150;
@@ -129,6 +142,12 @@ struct State {
     picker: RefCell<Option<picker::Handle>>,
     /// The `[[` completion popup, parented on the editor view.
     completion: complete::Popup,
+    /// Sidebar pages: the file tree, and full-text search.
+    sidebar_stack: Stack,
+    /// The full-text search page.
+    search_panel: Rc<search_panel::Panel>,
+    /// Pending debounced search, replaced on each keystroke.
+    search_pending: RefCell<Option<SourceId>>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -235,8 +254,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .width_request(240)
         .hscrollbar_policy(gtk::PolicyType::Automatic)
         .build();
-    // The theme stylesheet targets `.sidebar` for the surface color and tree rows.
-    sidebar.add_css_class("sidebar");
+    // The stack carries `.sidebar`, so styling it here would draw a second border.
 
     let status = Label::builder()
         .halign(gtk::Align::Start)
@@ -245,6 +263,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .margin_top(2)
         .margin_bottom(2)
         .build();
+
+    let (search_panel, sidebar_stack, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
 
     let config = Config::load();
     let startup = resolve_startup(path_arg, &config);
@@ -269,7 +289,11 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         app: app.clone(),
         picker: RefCell::new(None),
         completion,
+        sidebar_stack: sidebar_stack.clone(),
+        search_panel,
+        search_pending: RefCell::new(None),
     });
+    opened.replace(Some(Rc::clone(&state)));
 
     // Load content per the resolved startup target, opening a vault if requested.
     match startup {
@@ -281,7 +305,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
-        .start_child(&sidebar)
+        .start_child(&sidebar_stack)
         .end_child(&stack)
         .resize_end_child(true)
         .shrink_start_child(false)
@@ -776,6 +800,130 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_quick_open(app, state);
     wire_command_palette(app, state);
     wire_completion(state);
+    wire_search(app, state);
+}
+
+/// The state a search row activates through, filled in once the state exists.
+type LateState = Rc<RefCell<Option<Rc<State>>>>;
+
+/// Builds the two-page sidebar and the cell its rows activate through.
+fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Rc<search_panel::Panel>, Stack, LateState) {
+    let opened: LateState = Rc::new(RefCell::new(None));
+    let target = Rc::clone(&opened);
+    let panel = search_panel::Panel::new(accent, move |path, line| {
+        let state = target.borrow().clone();
+        if let Some(state) = state {
+            open_search_hit(&state, path, line);
+        }
+    });
+
+    let stack = Stack::new();
+    stack.add_named(tree, Some(PAGE_TREE));
+    stack.add_named(&panel.widget(), Some(PAGE_SEARCH));
+    stack.set_visible_child_name(PAGE_TREE);
+    stack.add_css_class("sidebar");
+
+    (panel, stack, opened)
+}
+
+/// Install Ctrl+Shift+F, and the panel behavior behind it.
+fn wire_search(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("search", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| show_search(&open_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.search", &["<Primary><Shift>f"]);
+
+    let typing = Rc::clone(state);
+    state.search_panel.connect_query(move |query| {
+        if let Some(pending) = typing.search_pending.borrow_mut().take() {
+            pending.remove();
+        }
+        let query = query.to_string();
+        let fire = Rc::clone(&typing);
+        let source = gtk::glib::timeout_add_local_once(
+            Duration::from_millis(SEARCH_DEBOUNCE_MS),
+            move || {
+                fire.search_pending.replace(None);
+                run_search(&fire, &query);
+            },
+        );
+        typing.search_pending.replace(Some(source));
+    });
+
+    let escaping = Rc::clone(state);
+    state.search_panel.connect_escape(move || close_search(&escaping));
+}
+
+/// Reveals the search page and puts the caret in its entry.
+///
+/// Pressing the key again from the search box closes it; pressing it from the
+/// editor pulls focus back to the query instead, which is the more useful move
+/// when the results are still on screen.
+fn show_search(state: &Rc<State>) {
+    if state.session.borrow().is_none() {
+        return;
+    }
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_SEARCH);
+    if showing && state.search_panel.has_focus() {
+        close_search(state);
+        return;
+    }
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_SEARCH);
+    state.search_panel.focus();
+}
+
+/// Puts the file tree back and returns focus to the editor.
+fn close_search(state: &Rc<State>) {
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Runs `query` against the index and fills the panel with matching lines.
+fn run_search(state: &Rc<State>, query: &str) {
+    let fts = search::fts_query(query);
+    if fts.is_empty() {
+        state.search_panel.set_hits(&[], false);
+        return;
+    }
+    let terms = search::terms(query);
+
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let notes = session
+        .index
+        .search_notes(&fts, MAX_SEARCH_NOTES)
+        .unwrap_or_default();
+
+    // Snippets come from the file: notes_fts is contentless, so it has no text to quote.
+    let hits: Vec<search_panel::Hit> = notes
+        .into_iter()
+        .map(|note| {
+            let text = session
+                .vault
+                .read_note(Path::new(&note.path))
+                .unwrap_or_default();
+            search_panel::Hit {
+                snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
+                path: note.path,
+            }
+        })
+        .collect();
+    state.search_panel.set_hits(&hits, true);
+}
+
+/// Opens a search result, putting the caret on the line that matched.
+fn open_search_hit(state: &Rc<State>, path: &str, line: i32) {
+    let rel = PathBuf::from(path);
+    load_note(state, &rel);
+    select_in_tree(state, &rel);
+    state.stack.set_visible_child_name(PAGE_EDIT);
+    state.editor.focus_line(line);
+    state.editor.grab_focus();
 }
 
 /// Offer note targets while the caret sits inside an unclosed `[[`.
@@ -1001,8 +1149,8 @@ fn wire_sidebar_toggle(app: &Application, state: &Rc<State>) {
     let action = gio::SimpleAction::new("toggle-sidebar", None);
     let sidebar_state = Rc::clone(state);
     action.connect_activate(move |_, _| {
-        let visible = sidebar_state.sidebar.get_visible();
-        sidebar_state.sidebar.set_visible(!visible);
+        let visible = sidebar_state.sidebar_stack.get_visible();
+        sidebar_state.sidebar_stack.set_visible(!visible);
     });
     app.add_action(&action);
     app.set_accels_for_action("app.toggle-sidebar", &["<Primary>b"]);
@@ -1035,6 +1183,7 @@ fn toggle_theme_mode(state: &Rc<State>) {
     apply_chrome_css(&state.chrome_provider, &next);
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
+    state.search_panel.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 
     // Swapping the provider CSS does not always invalidate the sidebar
