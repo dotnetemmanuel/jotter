@@ -103,7 +103,7 @@
 
   "typography": {
     "ui_font": "Inter, sans-serif",
-    "editor_font": "monospace",
+    "editor_font": "\"CaskaydiaMono Nerd Font\", monospace",
     "preview_font": "Inter, sans-serif",
     "mono_font": "monospace",
     "font_size": 15,
