@@ -927,6 +927,7 @@ dependencies = [
  "jotter-index",
  "jotter-parser",
  "jotter-preview",
+ "jotter-search",
  "jotter-theming",
  "jotter-vault",
  "serde",
@@ -975,6 +976,10 @@ dependencies = [
  "jotter-theming",
  "webkit6",
 ]
+
+[[package]]
+name = "jotter-search"
+version = "0.1.0"
 
 [[package]]
 name = "jotter-theming"
