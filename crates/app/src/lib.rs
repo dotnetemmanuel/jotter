@@ -4,6 +4,7 @@
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
 mod commands;
+mod complete;
 mod config;
 mod links;
 mod picker;
@@ -57,6 +58,9 @@ const MAX_SUGGESTIONS: usize = 5;
 
 /// How many rows the picker shows at most, however many notes matched.
 const MAX_PICKER_ROWS: usize = 50;
+
+/// How many suggestions the `[[` completion popup offers.
+const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
 const PALETTE_COMMANDS: [(&str, &str); 5] = [
@@ -123,6 +127,8 @@ struct State {
     app: Application,
     /// The picker while it is open, so its key can toggle it shut again.
     picker: RefCell<Option<picker::Handle>>,
+    /// The `[[` completion popup, parented on the editor view.
+    completion: complete::Popup,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -213,6 +219,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     let chrome_provider = install_chrome_css(&theme);
 
     let editor = Editor::new(&theme);
+    let completion = complete::Popup::new(&editor.text_view());
     let preview = Preview::new(&theme);
 
     let stack = Stack::new();
@@ -261,6 +268,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         overlay: gtk::Overlay::new(),
         app: app.clone(),
         picker: RefCell::new(None),
+        completion,
     });
 
     // Load content per the resolved startup target, opening a vault if requested.
@@ -269,15 +277,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         Startup::File(path) => open_single_file(&state, path.as_deref()),
     }
 
-    wire_toggle(app, &state);
-    wire_theme_toggle(app, &state);
-    wire_sidebar_toggle(app, &state);
-    wire_debounce(&state);
-    wire_preview_links(&state);
-    wire_editor_links(&state);
-    wire_save(app, &state);
-    wire_quick_open(app, &state);
-    wire_command_palette(app, &state);
+    wire_actions(app, &state);
 
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
@@ -762,6 +762,95 @@ fn toggle_mode(state: &Rc<State>) {
         render_into_preview(state);
         state.stack.set_visible_child_name(PAGE_PREVIEW);
     }
+}
+
+/// Install every accelerator, signal, and controller the window needs.
+fn wire_actions(app: &Application, state: &Rc<State>) {
+    wire_toggle(app, state);
+    wire_theme_toggle(app, state);
+    wire_sidebar_toggle(app, state);
+    wire_debounce(state);
+    wire_preview_links(state);
+    wire_editor_links(state);
+    wire_save(app, state);
+    wire_quick_open(app, state);
+    wire_command_palette(app, state);
+    wire_completion(state);
+}
+
+/// Offer note targets while the caret sits inside an unclosed `[[`.
+fn wire_completion(state: &Rc<State>) {
+    let moved = Rc::clone(state);
+    state
+        .editor
+        .connect_caret_moved(move || refresh_completion(&moved));
+
+    let keys = Rc::clone(state);
+    state.editor.connect_key_capture(move |key| {
+        if !keys.completion.is_open() {
+            return false;
+        }
+        match key {
+            gdk::Key::Down => keys.completion.step(1),
+            gdk::Key::Up => keys.completion.step(-1),
+            gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::Tab => accept_completion(&keys),
+            gdk::Key::Escape => keys.completion.hide(),
+            _ => return false,
+        }
+        true
+    });
+}
+
+/// Re-decide whether the completion popup belongs on screen, and with what.
+fn refresh_completion(state: &Rc<State>) {
+    let text = state.editor.text();
+    let caret = state.editor.caret_byte();
+
+    // Cheap check first: parsing for code ranges is only worth it inside a link.
+    let Some(context) = complete::context(&text, caret, &[]) else {
+        state.completion.hide();
+        return;
+    };
+    let dead = jotter_parser::wikilink::dead_ranges(&text);
+    if complete::context(&text, caret, &dead).is_none() {
+        state.completion.hide();
+        return;
+    }
+
+    let targets = completion_targets(state);
+    let rows = complete::rows(&context.query, &targets, MAX_COMPLETION_ROWS);
+    state.completion.show(state.editor.caret_rect(), &rows);
+}
+
+/// Writes the selected target into the link the caret is in.
+fn accept_completion(state: &Rc<State>) {
+    let Some(target) = state.completion.selected() else {
+        return;
+    };
+    let text = state.editor.text();
+    let caret = state.editor.caret_byte();
+    let Some(context) = complete::context(&text, caret, &[]) else {
+        return;
+    };
+    let (replacement, offset) = complete::insertion(&target, context.closed);
+    state.completion.hide();
+    state.editor.replace_range(context.range, &replacement, offset);
+}
+
+/// Every note as the shortest link target that reaches it.
+fn completion_targets(state: &Rc<State>) -> Vec<String> {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return Vec::new();
+    };
+    let resolver = session.resolver.borrow();
+    session
+        .index
+        .all_notes()
+        .unwrap_or_default()
+        .iter()
+        .map(|note| resolver.shortest_target(&note.path))
+        .collect()
 }
 
 /// Install a Ctrl+O accelerator that opens the picker on notes.

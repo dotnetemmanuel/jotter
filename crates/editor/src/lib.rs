@@ -292,6 +292,87 @@ impl Editor {
     pub fn connect_changed<F: Fn() + 'static>(&self, f: F) {
         self.buffer.connect_changed(move |_| f());
     }
+
+    /// Byte offset of the caret, in the same units the wikilink scanner reports.
+    #[must_use]
+    pub fn caret_byte(&self) -> usize {
+        let iter = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        self.buffer.text(&self.buffer.start_iter(), &iter, true).len()
+    }
+
+    /// Replace the buffer bytes in `range` with `text`, then put the caret
+    /// `caret_offset` bytes past the start of what was replaced.
+    pub fn replace_range(&self, range: Range<usize>, text: &str, caret_offset: usize) {
+        let Some((from, to)) = self.iters_for(range.clone()) else {
+            return;
+        };
+        self.buffer.delete(&mut from.clone(), &mut to.clone());
+        let Some(mut at) = self.iter_at_byte(range.start) else {
+            return;
+        };
+        self.buffer.insert(&mut at, text);
+        if let Some(caret) = self.iter_at_byte(range.start + caret_offset) {
+            self.buffer.place_cursor(&caret);
+        }
+    }
+
+    /// Where the caret is on screen, in view coordinates, for anchoring a popover.
+    #[must_use]
+    pub fn caret_rect(&self) -> gtk::gdk::Rectangle {
+        let iter = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let strong = self.view.cursor_locations(Some(&iter)).0;
+        let (x, y) = self.view.buffer_to_window_coords(
+            gtk::TextWindowType::Widget,
+            strong.x(),
+            strong.y(),
+        );
+        gtk::gdk::Rectangle::new(x, y, strong.width(), strong.height())
+    }
+
+    /// The text widget itself, so a popover can parent onto it.
+    #[must_use]
+    pub fn text_view(&self) -> gtk::Widget {
+        self.view.clone().upcast()
+    }
+
+    /// Run `f` whenever the caret moves, including moves caused by editing.
+    pub fn connect_caret_moved<F: Fn() + 'static>(&self, f: F) {
+        self.buffer
+            .connect_cursor_position_notify(move |_| f());
+    }
+
+    /// Intercept a key press before the view handles it; `f` returns true to consume.
+    pub fn connect_key_capture<F: Fn(gtk::gdk::Key) -> bool + 'static>(&self, f: F) {
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if f(key) {
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+        self.view.add_controller(keys);
+    }
+
+    fn iter_at_byte(&self, offset: usize) -> Option<gtk::TextIter> {
+        let (start, end) = self.buffer.bounds();
+        let text = self.buffer.text(&start, &end, true);
+        let (line, column) = LineIndex::new(&text).locate(offset)?;
+        self.buffer.iter_at_line_index(line, column)
+    }
+
+    fn iters_for(&self, range: Range<usize>) -> Option<(gtk::TextIter, gtk::TextIter)> {
+        let (start, end) = self.buffer.bounds();
+        let text = self.buffer.text(&start, &end, true);
+        let mut lines = LineIndex::new(&text);
+        let (from_line, from_col) = lines.locate(range.start)?;
+        let (to_line, to_col) = lines.locate(range.end)?;
+        Some((
+            self.buffer.iter_at_line_index(from_line, from_col)?,
+            self.buffer.iter_at_line_index(to_line, to_col)?,
+        ))
+    }
 }
 
 /// Tag name for a resolved wikilink in the source buffer.

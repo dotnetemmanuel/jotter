@@ -148,6 +148,21 @@ popover > contents {
   background-color: alpha(#1c1e26, 0.45);
 }
 
+.completion listbox {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.completion listbox > row {
+  border-radius: 3px;
+  padding: 2px 8px;
+}
+
+.completion listbox > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
 .picker {
   background-color: #232530;
   color: #fadad1;

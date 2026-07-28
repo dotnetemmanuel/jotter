@@ -276,7 +276,7 @@ fn step(selection: &SingleSelection, list_view: &ListView, delta: i32) {
 }
 
 /// Wraps the matched characters of `label` in bold, escaping the rest for Pango.
-fn highlight(label: &str, positions: &[usize]) -> String {
+pub fn highlight(label: &str, positions: &[usize]) -> String {
     let mut out = String::with_capacity(label.len());
     let mut bold = false;
     for (offset, character) in label.char_indices() {

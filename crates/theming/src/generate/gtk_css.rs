@@ -42,6 +42,9 @@ entry:focus-within {{\n  border-bottom-color: {accent};\n}}\n\n\
 entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.completion listbox {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
+.completion listbox > row {{\n  border-radius: {r}px;\n  padding: 2px 8px;\n}}\n\n\
+.completion listbox > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .picker {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  padding: 8px 10px 6px 10px;\n}}\n\n\
 .picker entry {{\n  font-size: {picker_size}px;\n  padding-bottom: 8px;\n}}\n\n\
 .picker listview {{\n  background-color: transparent;\n  color: {text};\n  margin-top: 6px;\n}}\n\n\
