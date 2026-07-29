@@ -17,6 +17,8 @@ pub struct Hit {
     pub path: String,
     /// Matching lines, already capped by the caller.
     pub snippets: Vec<Snippet>,
+    /// Word shown where the line count usually goes, for lists that count nothing.
+    pub badge: Option<String>,
 }
 
 /// A list of hits. Rows activate through the callback given at construction.
@@ -106,7 +108,8 @@ impl List {
         let mut targets = Vec::new();
 
         for hit in hits {
-            self.rows.append(&heading_row(&hit.path, hit.snippets.len()));
+            self.rows
+                .append(&heading_row(&hit.path, hit.snippets.len(), hit.badge.as_deref()));
             targets.push((hit.path.clone(), 0));
             for snippet in &hit.snippets {
                 self.rows.append(&snippet_row(snippet, &self.accent.borrow()));
@@ -170,7 +173,7 @@ fn split_path(path: &str) -> (String, String) {
 }
 
 /// The note line of a result group.
-fn heading_row(path: &str, matches: usize) -> gtk::Box {
+fn heading_row(path: &str, matches: usize, badge: Option<&str>) -> gtk::Box {
     let (folder, stem) = split_path(path);
 
     let row = gtk::Box::new(Orientation::Horizontal, 6);
@@ -193,7 +196,7 @@ fn heading_row(path: &str, matches: usize) -> gtk::Box {
     let count = gtk::Label::builder()
         .xalign(1.0)
         .hexpand(true)
-        .label(matches.to_string())
+        .label(badge.map_or_else(|| matches.to_string(), str::to_string))
         .build();
     count.add_css_class("search-count");
     row.append(&count);

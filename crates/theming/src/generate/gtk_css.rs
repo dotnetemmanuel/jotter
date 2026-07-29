@@ -48,6 +48,22 @@ entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: non
 row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.conflict {{\n  background-color: {bg};\n  padding: 10px 12px;\n}}\n\n\
+.conflict-header {{\n  padding-bottom: 4px;\n  border-bottom: {bw}px solid {overlay};\n}}\n\n\
+.conflict-heading {{\n  font-weight: bold;\n}}\n\n\
+.conflict-progress {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.conflict-title {{\n  font-family: {editor_font};\n  font-size: {small}px;\n  font-weight: bold;\n  padding: 2px 6px;\n  border-radius: {r}px;\n}}\n\n\
+.conflict-title.conflict-incoming {{\n  color: {focus};\n}}\n\n\
+.conflict-title.conflict-yours {{\n  color: {accent};\n}}\n\n\
+.conflict-title.conflict-resolution {{\n  color: {text};\n}}\n\n\
+.conflict-body {{\n  font-family: {editor_font};\n  border-radius: {r}px;\n  padding: 6px 8px;\n}}\n\n\
+.conflict-body.conflict-incoming, .conflict-body.conflict-incoming text {{\n  background-color: alpha({focus}, 0.12);\n  color: {text};\n}}\n\n\
+.conflict-body.conflict-yours, .conflict-body.conflict-yours text {{\n  background-color: alpha({accent}, 0.12);\n  color: {text};\n}}\n\n\
+.conflict-body.conflict-resolution, .conflict-body.conflict-resolution text {{\n  background-color: {surface};\n  color: {text};\n}}\n\n\
+.conflict-actions {{\n  padding-top: 4px;\n}}\n\n\
+.conflict-action {{\n  padding: 4px 10px;\n}}\n\n\
+.status-git {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-family: {editor_font};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
+.status-git:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .status-broken {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {danger};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
 .status-broken:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .backlinks {{\n  background-color: {bg};\n}}\n\n\
@@ -86,6 +102,7 @@ tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px s
             overlay = c.overlay,
             text = c.text,
             accent = c.accent,
+            focus = c.focus,
             border = c.border,
             danger = c.danger,
             muted = c.muted,

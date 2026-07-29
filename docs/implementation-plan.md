@@ -10,8 +10,9 @@ before touching any v1.5 feature.
 
 ## Status (2026-07-28)
 
-Phases 0 through 3 are complete. Phase 4 is complete: frontmatter, tags,
-backlinks, the tag page, and the broken-link report.
+Phases 0 through 4 are complete. Phase 5 (git) is complete on branch
+`phase-5-git`: optional git, sync on Ctrl+Shift+G, a changed-notes page, and a
+guided conflict resolver.
 Phase 3 was split: wikilinks landed first because they carry the correctness risk
 and are testable without a GUI, and the pickers share a widget with search.
 
@@ -338,11 +339,37 @@ Acceptance:
 
 ---
 
-## Phase 5: git (target: 1 week)
+## Phase 5: git (complete)
 
-Goal: full sync loop with real credentials.
+Shipped, and deliberately narrower than the original task list below: sync is one
+action rather than four, and there is no staging UI, because a notes vault
+commits everything anyway.
 
-Tasks:
+- **Optional and silent.** `Repo::discover` opens only the repository whose
+  working tree *is* the vault root, so a vault inside a larger repo is left
+  alone. No repo means no status segment, no palette entries, no page.
+- **Hybrid execution.** git2 in-process for status, commit, and conflict state;
+  the `git` binary for fetch, rebase, and push, so ssh agents, credential
+  helpers, and signing are the user's own and libgit2 needs no network
+  transports.
+- **Sync (`Ctrl+Shift+G`)**: save, commit all with a generated message, fetch,
+  rebase, push, reported as one sentence. Rebase, never merge.
+- **Status segment** with the branch glyph and non-zero counts only, polled every
+  30 seconds, after every save, and after every sync.
+- **Guided conflict resolver**, modelled on Cairn's: per block rather than per
+  file, sides named incoming and yours (never ours and theirs, which invert
+  under rebase), choices of incoming / yours / both / edit by hand, `a d b e`,
+  `n N` stepping with wrap, `[ ]` jumping notes, and a rail in the sidebar.
+  `crates/git/src/conflict.rs` parses and reassembles losslessly.
+- **jotter keeps its own state out of git**: `.jotter/.gitignore` (naming the
+  database files and itself) and `.trash/.gitignore`, plus a palette action to
+  untrack an index that was committed before.
+
+Tests build real repositories in temp dirs with a bare remote on disk, so fetch,
+push, rebase, and genuine conflicts are covered by `cargo test` with no network
+and no credentials.
+
+Original tasks:
 - `crates/git` over `git2`. Status: current branch, ahead/behind, dirty flag.
 - Credentials via `RemoteCallbacks::credentials`:
   - SSH: `Cred::ssh_key_from_agent(username)` first, then `Cred::ssh_key` reading
@@ -392,9 +419,12 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
   across folders and creates parent directories, but the tree UI joins the typed
   name onto the note's existing parent, so a rename cannot leave its folder.
   Needs drop targets on folder rows and on the root, a moved-note reindex (the
-  rename path already does this), and a decision on links: bare `[[stem]]` links
-  survive a move by design, path-form `[[notes/plan]]` links do not, so either
-  rewrite them on move or let the broken-link report catch them.
+  rename path already does this), and a link rewrite: bare `[[stem]]` links
+  survive a move by design, path-form `[[notes/plan]]` links do not, so the move
+  rewrites them. The `links` table already names every note pointing at the moved
+  one (`Index::linking_notes`), so the move reads those notes, rewrites the
+  path-form targets, and reindexes them. The same machinery serves a rename,
+  which today silently breaks every `[[stem]]` link pointing at the old name.
 
 Font choice and theme choice both reach into `crates/theming`, which currently
 takes typography from the theme file. Settings must override it per user without
@@ -417,7 +447,8 @@ Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
 Ctrl+/ toggle line comment,
 Ctrl+H keybinding sheet (phase 6), Ctrl+K insert link,
 Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
-F2 rename, Ctrl+G S stage all, Ctrl+G C commit, Ctrl+G P push, Ctrl+G F pull.
+F2 rename, Ctrl+Shift+G sync vault (commit all, pull, push as one action;
+the planned Ctrl+G chords went with the separate stage and push actions).
 
 ## Startup sequence (implement in phase 2, complete by phase 5)
 
