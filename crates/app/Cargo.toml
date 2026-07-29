@@ -7,6 +7,7 @@ edition.workspace = true
 anyhow = "1.0.103"
 gtk = { version = "0.11.4", package = "gtk4", features = ["v4_12"] }
 jotter-editor = { version = "0.1.0", path = "../editor" }
+jotter-git = { version = "0.1.0", path = "../git" }
 jotter-index = { version = "0.1.0", path = "../index" }
 jotter-parser = { version = "0.1.0", path = "../parser" }
 jotter-preview = { version = "0.1.0", path = "../preview" }

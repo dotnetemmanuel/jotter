@@ -16,8 +16,11 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 mod ignore;
+mod run;
+mod sync;
 
 pub use ignore::write_ignores;
+pub use sync::SyncReport;
 
 /// Errors surfaced by the crate.
 #[derive(Debug, Error)]
@@ -25,6 +28,12 @@ pub enum GitError {
     /// A libgit2 call failed.
     #[error("git error: {0}")]
     Git(#[from] git2::Error),
+    /// The `git` binary ran and refused, reported in its own words.
+    #[error("{0}")]
+    Command(String),
+    /// The `git` binary could not be run at all.
+    #[error("could not run git: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// What changed about one path since the last commit.
@@ -38,6 +47,8 @@ pub enum ChangeKind {
     Deleted,
     /// Moved or renamed since the last commit.
     Renamed,
+    /// Both sides changed it and a rebase stopped here.
+    Conflicted,
 }
 
 impl ChangeKind {
@@ -49,6 +60,7 @@ impl ChangeKind {
             ChangeKind::Modified => "modified",
             ChangeKind::Deleted => "deleted",
             ChangeKind::Renamed => "renamed",
+            ChangeKind::Conflicted => "conflict",
         }
     }
 }
@@ -116,6 +128,11 @@ impl Repo {
         &self.root
     }
 
+    /// The libgit2 handle, for the parts of this crate that speak it directly.
+    pub(crate) fn inner(&self) -> &git2::Repository {
+        &self.inner
+    }
+
     /// Reads branch, tracking counts, and the changed paths.
     ///
     /// # Errors
@@ -177,6 +194,34 @@ impl Repo {
         upstream.name().ok().flatten().map(str::to_string)
     }
 
+    /// Whether the repository tracks anything under `.jotter`.
+    ///
+    /// True only for a vault committed before jotter wrote ignore files: the
+    /// ignore rules do not apply to paths git already tracks, so the database
+    /// would keep landing in every commit until it is untracked.
+    #[must_use]
+    pub fn tracks_jotter(&self) -> bool {
+        let Ok(index) = self.inner.index() else {
+            return false;
+        };
+        index
+            .iter()
+            .filter_map(|entry| String::from_utf8(entry.path).ok())
+            .any(|path| path.starts_with(JOTTER_PREFIX))
+    }
+
+    /// Stops tracking `.jotter` without deleting anything on disk.
+    ///
+    /// The removal is left staged, so the next commit records it and the user
+    /// can see what happened before it is written to history.
+    ///
+    /// # Errors
+    /// Returns [`GitError::Command`] with git's own message if the removal fails.
+    pub fn untrack_jotter(&self) -> Result<(), GitError> {
+        run::git(&self.root, &["rm", "--cached", "-r", "--quiet", ".jotter"])?;
+        Ok(())
+    }
+
     /// Commits ahead of and behind the tracking branch, zero without one.
     fn tracking(&self) -> Result<(usize, usize), GitError> {
         let Ok(head) = self.inner.head() else {
@@ -196,12 +241,20 @@ impl Repo {
     }
 }
 
+/// The jotter state directory, as git spells paths.
+const JOTTER_PREFIX: &str = ".jotter/";
+
 /// The single change worth reporting for a status entry.
 ///
 /// A path can carry index and working-tree bits at once (staged then edited
 /// again); the working tree is what the user sees, so it wins.
 fn kind_of(status: git2::Status) -> Option<ChangeKind> {
     use git2::Status as S;
+    // First: a conflicted path also carries modified and deleted bits, and
+    // reporting it as merely modified would hide the thing blocking the rebase.
+    if status.intersects(S::CONFLICTED) {
+        return Some(ChangeKind::Conflicted);
+    }
     if status.intersects(S::WT_DELETED | S::INDEX_DELETED) {
         return Some(ChangeKind::Deleted);
     }
@@ -250,6 +303,12 @@ mod tests {
     #[test]
     fn an_unchanged_file_is_not_a_change() {
         assert_eq!(kind_of(git2::Status::CURRENT), None);
+    }
+
+    #[test]
+    fn a_conflicted_file_outranks_its_other_bits() {
+        let conflicted = git2::Status::CONFLICTED | git2::Status::WT_MODIFIED;
+        assert_eq!(kind_of(conflicted), Some(ChangeKind::Conflicted));
     }
 
     #[test]

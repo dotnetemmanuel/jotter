@@ -8,6 +8,8 @@ mod commands;
 mod complete;
 mod config;
 mod drill;
+mod git_panel;
+mod git_status;
 mod links;
 mod picker;
 mod results;
@@ -57,6 +59,7 @@ const PAGE_TREE: &str = "tree";
 const PAGE_SEARCH: &str = "search";
 const PAGE_TAGS: &str = "tags";
 const PAGE_REPORT: &str = "report";
+const PAGE_GIT: &str = "git";
 
 /// Debounce before a typed query hits the index, in milliseconds.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
@@ -67,6 +70,10 @@ const MAX_SEARCH_LINES: usize = 3;
 
 /// Re-render debounce for an already-open preview, in milliseconds.
 const DEBOUNCE_MS: u64 = 150;
+
+/// How long a message the user asked for holds the status bar against the
+/// background chatter of note counts.
+const STATUS_HOLD_SECONDS: u32 = 6;
 
 /// How often the GTK loop drains the watcher receiver and index progress channel.
 const DRAIN_MS: u64 = 200;
@@ -95,6 +102,14 @@ const PALETTE_COMMANDS: [(&str, &str); 8] = [
 /// Fallback document shown when no path is given or a read fails.
 const SAMPLE_MARKDOWN: &str = "# jotter\n\nA native GTK4 markdown vault.\n\n## Toggle\n\nPress Ctrl+E to switch between edit and preview.\n\n## Code\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```\n";
 
+/// What a git worker thread sends back to the UI.
+enum GitNews {
+    /// A fresh status reading.
+    Status(jotter_git::Status),
+    /// A sync finished, with what it did or why it could not.
+    Synced(Result<jotter_git::SyncReport, String>),
+}
+
 /// The active vault: filesystem handle, UI-thread index, and watcher guard.
 ///
 /// Grouped so the whole session can be optional (single-file mode has none).
@@ -113,6 +128,8 @@ struct VaultSession {
     resolver: RefCell<Resolver>,
     /// Note path to display title, so tree rows need no query per bind.
     titles: RefCell<HashMap<String, String>>,
+    /// Whether this vault is its own git repository. Absent means no git at all.
+    is_git: bool,
 }
 
 /// Shared, single-threaded application state cloned into GTK closures.
@@ -136,6 +153,8 @@ struct State {
     status: Label,
     /// The broken-link count at the right of the status bar, hidden when zero.
     broken: gtk::Button,
+    /// The git segment at the far right, hidden for a vault with no repository.
+    git: gtk::Button,
     /// The active vault session, absent in single-file mode.
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
@@ -168,8 +187,18 @@ struct State {
     tags_panel: Rc<drill::Panel>,
     /// The broken-link report page.
     report_panel: Rc<drill::Panel>,
+    /// The git page: what changed since the last commit.
+    git_panel: Rc<git_panel::Panel>,
     /// Pending debounced search, replaced on each keystroke.
     search_pending: RefCell<Option<SourceId>>,
+    /// Long-lived sender for git news, kept so the channel outlives a worker.
+    git_tx: RefCell<Option<std::sync::mpsc::Sender<GitNews>>>,
+    /// Bumped on every vault change, so timers from an old vault stop themselves.
+    git_generation: Cell<u64>,
+    /// The last git status read, for the status bar and the actions behind it.
+    git_last: RefCell<Option<jotter_git::Status>>,
+    /// Bumped per explicit message, so only the newest one clears itself.
+    status_message: Cell<u64>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -278,7 +307,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .build();
     // The stack carries `.sidebar`, so styling it here would draw a second border.
 
-    let (status_bar, status, broken) = build_status_bar();
+    let (status_bar, status, broken, git) = build_status_bar();
 
     let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
@@ -300,6 +329,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         sidebar: sidebar.clone(),
         status: status.clone(),
         broken,
+        git: git.clone(),
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
@@ -316,7 +346,12 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         search_panel: pages.search,
         tags_panel: pages.tags,
         report_panel: pages.report,
+        git_panel: pages.git,
         search_pending: RefCell::new(None),
+        git_tx: RefCell::new(None),
+        git_generation: Cell::new(0),
+        git_last: RefCell::new(None),
+        status_message: Cell::new(0),
     });
     opened.replace(Some(Rc::clone(&state)));
 
@@ -354,7 +389,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
 /// Builds the bottom bar: the status message, and the broken-link count that
 /// sits at its right until there is nothing broken to report.
-fn build_status_bar() -> (gtk::Box, Label, gtk::Button) {
+fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
     let status = Label::builder()
         .halign(gtk::Align::Start)
         .margin_start(8)
@@ -366,16 +401,29 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button) {
     let broken = gtk::Button::builder()
         .has_frame(false)
         .halign(gtk::Align::End)
-        .hexpand(true)
         .visible(false)
         .tooltip_text("Show broken links")
         .build();
     broken.add_css_class("status-broken");
 
+    let git = gtk::Button::builder()
+        .has_frame(false)
+        .halign(gtk::Align::End)
+        .visible(false)
+        .build();
+    git.add_css_class("status-git");
+
+    // An explicit spacer, because the right-hand widgets come and go and a
+    // hidden one cannot hold the gap open.
+    let spacer = gtk::Box::new(Orientation::Horizontal, 0);
+    spacer.set_hexpand(true);
+
     let bar = gtk::Box::new(Orientation::Horizontal, 0);
     bar.append(&status);
+    bar.append(&spacer);
+    bar.append(&git);
     bar.append(&broken);
-    (bar, status, broken)
+    (bar, status, broken, git)
 }
 
 /// Builds the window around the already-assembled layout and shows it.
@@ -414,6 +462,7 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     state.dirty.set(false);
     // Single-file mode has an empty, non-interactive sidebar.
     state.status.set_text("no vault open");
+    stop_git(state);
 }
 
 /// Opens `root` as a vault: builds the tree, records it in recents, starts the
@@ -460,7 +509,15 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         current: RefCell::new(None),
         resolver: RefCell::new(Resolver::default()),
         titles: RefCell::new(HashMap::new()),
+        is_git: jotter_git::Repo::discover(root).is_some(),
     }));
+
+    // Written whether or not the vault is a repo: one that becomes one later is
+    // covered without jotter having to notice.
+    if let Err(err) = jotter_git::write_ignores(root) {
+        eprintln!("jotter: could not write ignore files: {err}");
+    }
+    start_git_polling(state, root);
 
     // The index persists across runs, so links can resolve before reindexing runs.
     refresh_links(state);
@@ -581,6 +638,7 @@ fn refresh_backlinks(state: &Rc<State>) {
             (!snippets.is_empty()).then_some(results::Hit {
                 path: note.path,
                 snippets,
+                badge: None,
             })
         })
         .collect();
@@ -836,16 +894,225 @@ fn refresh_links(state: &Rc<State>) {
     refresh_broken(state);
 }
 
+/// Starts the git status poll for the vault at `root`.
+///
+/// A vault with no repository starts nothing at all: no timer, no thread, and no
+/// segment in the status bar. Git is a thing you have, not a thing jotter adds.
+fn start_git_polling(state: &Rc<State>, root: &Path) {
+    stop_git(state);
+    if !state.session.borrow().as_ref().is_some_and(|s| s.is_git) {
+        return;
+    }
+
+    let generation = state.git_generation.get();
+    let (tx, rx) = std::sync::mpsc::channel::<GitNews>();
+    state.git_tx.replace(Some(tx));
+
+    let draining = Rc::clone(state);
+    gtk::glib::timeout_add_local(Duration::from_millis(DRAIN_MS), move || {
+        if draining.git_generation.get() != generation {
+            return gtk::glib::ControlFlow::Break;
+        }
+        while let Ok(news) = rx.try_recv() {
+            match news {
+                GitNews::Status(status) => show_git_status(&draining, status),
+                GitNews::Synced(outcome) => show_sync_outcome(&draining, outcome),
+            }
+        }
+        gtk::glib::ControlFlow::Continue
+    });
+
+    let polling = Rc::clone(state);
+    gtk::glib::timeout_add_seconds_local(git_status::POLL_SECONDS, move || {
+        if polling.git_generation.get() != generation {
+            return gtk::glib::ControlFlow::Break;
+        }
+        refresh_git(&polling);
+        gtk::glib::ControlFlow::Continue
+    });
+
+    let _ = root;
+    refresh_git(state);
+}
+
+/// Retires the current poll and hides the segment, for a vault change or a
+/// single file.
+fn stop_git(state: &Rc<State>) {
+    state.git_generation.set(state.git_generation.get().wrapping_add(1));
+    state.git_tx.replace(None);
+    state.git_last.replace(None);
+    state.git.set_visible(false);
+}
+
+/// Reads git status on a worker thread and sends it back to the UI.
+fn refresh_git(state: &Rc<State>) {
+    let Some(root) = state
+        .session
+        .borrow()
+        .as_ref()
+        .filter(|session| session.is_git)
+        .map(|session| session.vault.root().to_path_buf())
+    else {
+        return;
+    };
+    let Some(tx) = state.git_tx.borrow().clone() else {
+        return;
+    };
+    std::thread::spawn(move || {
+        if let Some(status) = git_status::read(&root) {
+            // A closed vault drops the receiver; nothing to report to.
+            let _ = tx.send(GitNews::Status(status));
+        }
+    });
+}
+
+/// Saves, then commits, pulls, and pushes on a worker thread.
+///
+/// The buffer is written first: committing what is on disk while the editor
+/// holds something newer would quietly commit the wrong thing.
+fn sync_vault(state: &Rc<State>) {
+    if state.dirty.get() {
+        save_note(state);
+    }
+    let Some((root, changed)) = state
+        .session
+        .borrow()
+        .as_ref()
+        .filter(|session| session.is_git)
+        .map(|session| session.vault.root().to_path_buf())
+        .map(|root| {
+            let changed = state
+                .git_last
+                .borrow()
+                .as_ref()
+                .map_or(0, |status| status.changed.len());
+            (root, changed)
+        })
+    else {
+        return;
+    };
+    let Some(tx) = state.git_tx.borrow().clone() else {
+        return;
+    };
+
+    let when = gtk::glib::DateTime::now_local()
+        .and_then(|now| now.format("%Y-%m-%d %H:%M"))
+        .map_or_else(|_| String::from("jotter"), |stamp| stamp.to_string());
+    let message = git_status::commit_message(changed.max(1), &when);
+
+    say(state, "Syncing...");
+    std::thread::spawn(move || {
+        let outcome = match jotter_git::Repo::discover(&root) {
+            Some(repo) => repo.sync(&message).map_err(|err| err.to_string()),
+            None => Err("this vault is not a git repository".to_string()),
+        };
+        let _ = tx.send(GitNews::Synced(outcome));
+    });
+}
+
+/// Reports what a finished sync did, and refreshes everything it touched.
+fn show_sync_outcome(state: &Rc<State>, outcome: Result<jotter_git::SyncReport, String>) {
+    // A rebase can rewrite notes under the editor, so the tree and index follow.
+    // This runs first because refreshing the tree writes the note count to the
+    // status bar, which would otherwise wipe the sentence below.
+    refresh_tree(state);
+    refresh_git(state);
+
+    match outcome {
+        Ok(report) => {
+            say(state, &git_status::sync_summary(&report));
+            if !report.conflicts.is_empty() {
+                open_git_page(state);
+            }
+        }
+        Err(err) => {
+            eprintln!("jotter: sync failed: {err}");
+            say(state, &format!("Sync failed: {err}"));
+        }
+    }
+}
+
+/// Toggles the git page: the action and the status-bar segment both land here.
+fn toggle_git_page(state: &Rc<State>) {
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT);
+    if showing && state.git_panel.has_focus() {
+        close_git_page(state);
+        return;
+    }
+    open_git_page(state);
+}
+
+/// Reveals the git page, whatever is showing now.
+///
+/// Separate from the toggle because a conflict must open the page, and a toggle
+/// would close it whenever the user happened to be looking at it already.
+fn open_git_page(state: &Rc<State>) {
+    if !state.session.borrow().as_ref().is_some_and(|s| s.is_git) {
+        return;
+    }
+    let changed = state
+        .git_last
+        .borrow()
+        .as_ref()
+        .map(|status| status.changed.clone())
+        .unwrap_or_default();
+    state.git_panel.show(&changed);
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_GIT);
+    state.git_panel.focus_list();
+}
+
+/// Applies a status that arrived from the worker.
+fn show_git_status(state: &Rc<State>, status: jotter_git::Status) {
+    state.git.set_label(&git_status::label(&status));
+    state.git.set_tooltip_text(Some(&git_status::tooltip(&status)));
+    state.git.set_visible(true);
+    if state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT) {
+        state.git_panel.show(&status.changed);
+    }
+    state.git_last.replace(Some(status));
+}
+
+/// Says something in the status bar and holds it there for a few seconds.
+///
+/// Without the hold, a watcher event or a reindex writes the note count over the
+/// answer the user was waiting for, which is exactly when they are looking.
+fn say(state: &Rc<State>, text: &str) {
+    state.status.set_text(text);
+    let generation = state.status_message.get().wrapping_add(1);
+    state.status_message.set(generation);
+
+    let clearing = Rc::clone(state);
+    gtk::glib::timeout_add_seconds_local_once(STATUS_HOLD_SECONDS, move || {
+        if clearing.status_message.get() == generation {
+            clearing.status_message.set(0);
+            update_note_count(&clearing);
+        }
+    });
+}
+
 /// Refreshes the status bar note count from the index after a structural change,
 /// so an in-app or external create/delete is reflected without a full reconcile.
 fn update_note_count(state: &Rc<State>) {
+    if state.status_message.get() != 0 {
+        return;
+    }
     let session = state.session.borrow();
     let Some(session) = session.as_ref() else {
         return;
     };
     match session.index.count_notes() {
-        Ok(count) => state.status.set_text(&format!("Indexed {count} notes")),
+        Ok(count) => state.status.set_text(&indexed_text(count)),
         Err(err) => eprintln!("jotter: could not count notes: {err}"),
+    }
+}
+
+/// The idle status-bar text: how many notes the index holds.
+fn indexed_text(count: i64) -> String {
+    match count {
+        1 => "Indexed 1 note".to_string(),
+        many => format!("Indexed {many} notes"),
     }
 }
 
@@ -1028,7 +1295,72 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_search(app, state);
     wire_tags(app, state);
     wire_report(app, state);
+    wire_git(app, state);
     wire_editor_escape(state);
+}
+
+/// Install the git actions and the status-bar segment behind them.
+fn wire_git(app: &Application, state: &Rc<State>) {
+    let refresh = gio::SimpleAction::new("git-refresh", None);
+    let refreshing = Rc::clone(state);
+    refresh.connect_activate(move |_, _| refresh_git(&refreshing));
+    app.add_action(&refresh);
+
+    let untrack = gio::SimpleAction::new("git-untrack", None);
+    let untracking = Rc::clone(state);
+    untrack.connect_activate(move |_, _| untrack_jotter(&untracking));
+    app.add_action(&untrack);
+
+    let sync = gio::SimpleAction::new("git-sync", None);
+    let syncing = Rc::clone(state);
+    sync.connect_activate(move |_, _| sync_vault(&syncing));
+    app.add_action(&sync);
+    // Shift as well as Control: sync rewrites history, so it should not sit
+    // one slip away from a common key.
+    app.set_accels_for_action("app.git-sync", &["<Primary><Shift>g"]);
+
+    let page = gio::SimpleAction::new("git-changes", None);
+    let showing = Rc::clone(state);
+    page.connect_activate(move |_, _| toggle_git_page(&showing));
+    app.add_action(&page);
+
+    // The segment is the way into the page, the way the broken-link count is.
+    let clicked = Rc::clone(state);
+    state.git.connect_clicked(move |_| toggle_git_page(&clicked));
+
+    let escaping = Rc::clone(state);
+    state.git_panel.connect_escape(move || close_git_page(&escaping));
+    let going_back = Rc::clone(state);
+    state.git_panel.connect_back(move || close_git_page(&going_back));
+}
+
+/// Puts the tree back and returns focus to the editor.
+fn close_git_page(state: &Rc<State>) {
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Stops the repository tracking `.jotter`, reporting either way.
+fn untrack_jotter(state: &Rc<State>) {
+    let Some(root) = state
+        .session
+        .borrow()
+        .as_ref()
+        .map(|session| session.vault.root().to_path_buf())
+    else {
+        return;
+    };
+    let Some(repo) = jotter_git::Repo::discover(&root) else {
+        return;
+    };
+    match repo.untrack_jotter() {
+        Ok(()) => say(state, "The jotter index is no longer tracked. Commit to record it."),
+        Err(err) => {
+            eprintln!("jotter: could not untrack the index: {err}");
+            say(state, &format!("Could not untrack: {err}"));
+        }
+    }
+    refresh_git(state);
 }
 
 /// Install the broken-link report: its action, its status-bar count, and the
@@ -1143,6 +1475,7 @@ fn show_broken_linkers(state: &Rc<State>, missing: &str) {
             (!snippets.is_empty()).then_some(results::Hit {
                 path: note.path,
                 snippets,
+                badge: None,
             })
         })
         .collect();
@@ -1191,6 +1524,10 @@ fn wire_editor_escape(state: &Rc<State>) {
             }
             Some(PAGE_REPORT) => {
                 escaping.report_panel.focus_list();
+                true
+            }
+            Some(PAGE_GIT) => {
+                escaping.git_panel.focus_list();
                 true
             }
             Some(PAGE_SEARCH) => {
@@ -1246,6 +1583,7 @@ fn show_tagged_notes(state: &Rc<State>, tag: &str) {
             results::Hit {
                 snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
                 path: note.path,
+                badge: None,
             }
         })
         .collect();
@@ -1295,11 +1633,14 @@ fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
         open_through(&opened),
     );
 
+    let git = git_panel::Panel::new(accent, open_through(&opened));
+
     let stack = Stack::new();
     stack.add_named(tree, Some(PAGE_TREE));
     stack.add_named(&search.widget(), Some(PAGE_SEARCH));
     stack.add_named(&tags.widget(), Some(PAGE_TAGS));
     stack.add_named(&report.widget(), Some(PAGE_REPORT));
+    stack.add_named(&git.widget(), Some(PAGE_GIT));
     stack.set_visible_child_name(PAGE_TREE);
     stack.add_css_class("sidebar");
 
@@ -1308,6 +1649,7 @@ fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
             search,
             tags,
             report,
+            git,
             stack,
         },
         opened,
@@ -1330,6 +1672,7 @@ struct Sidebar {
     search: Rc<search_panel::Panel>,
     tags: Rc<drill::Panel>,
     report: Rc<drill::Panel>,
+    git: Rc<git_panel::Panel>,
     stack: Stack,
 }
 
@@ -1428,6 +1771,7 @@ fn run_search(state: &Rc<State>, query: &str) {
             results::Hit {
                 snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
                 path: note.path,
+                badge: None,
             }
         })
         .collect();
@@ -1556,7 +1900,7 @@ fn open_picker(state: &Rc<State>, initial_query: &str) {
 
     let notes = switcher_candidates(state).unwrap_or_default();
     let recents = recent_notes(state);
-    let command_list = command_list(&state.app);
+    let command_list = command_list(state);
 
     // Set by the source on every keystroke so activation knows which list it chose from.
     let in_command_mode = Rc::new(Cell::new(false));
@@ -1594,15 +1938,53 @@ fn open_picker(state: &Rc<State>, initial_query: &str) {
 }
 
 /// Every command the palette offers, labelled with its current accelerator.
-fn command_list(app: &Application) -> Vec<commands::Command> {
-    PALETTE_COMMANDS
+///
+/// Built per vault rather than from a fixed list: the git entries exist only
+/// where there is a repository to run them against.
+fn command_list(state: &Rc<State>) -> Vec<commands::Command> {
+    let app = &state.app;
+    let mut commands: Vec<commands::Command> = PALETTE_COMMANDS
         .iter()
         .map(|(action, title)| commands::Command {
             action: (*action).to_string(),
             title: (*title).to_string(),
             accel: accel_label(app, action),
         })
-        .collect()
+        .collect();
+
+    for (action, title) in git_commands(state) {
+        commands.push(commands::Command {
+            action: action.to_string(),
+            title: title.to_string(),
+            accel: accel_label(app, action),
+        });
+    }
+    commands
+}
+
+/// The git entries this vault has earned, in palette order.
+fn git_commands(state: &Rc<State>) -> Vec<(&'static str, &'static str)> {
+    let Some(root) = state
+        .session
+        .borrow()
+        .as_ref()
+        .filter(|session| session.is_git)
+        .map(|session| session.vault.root().to_path_buf())
+    else {
+        return Vec::new();
+    };
+
+    let mut commands = vec![
+        ("git-sync", "Sync vault"),
+        ("git-changes", "Show changed notes"),
+        ("git-refresh", "Refresh git status"),
+    ];
+    // Only worth offering where it would do something: a vault committed before
+    // jotter wrote its ignore files.
+    if jotter_git::Repo::discover(&root).is_some_and(|repo| repo.tracks_jotter()) {
+        commands.push(("git-untrack", "Stop tracking the jotter index"));
+    }
+    commands
 }
 
 /// The first accelerator bound to `action`, as a display label like `Ctrl+S`.
@@ -1704,6 +2086,7 @@ fn toggle_theme_mode(state: &Rc<State>) {
     state.search_panel.set_accent(&next.chrome.accent);
     state.tags_panel.set_accent(&next.chrome.accent);
     state.report_panel.set_accent(&next.chrome.accent);
+    state.git_panel.set_accent(&next.chrome.accent);
     state.backlinks.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 
@@ -1989,7 +2372,7 @@ fn wire_save(app: &Application, state: &Rc<State>) {
 /// single opened file is written directly. The built-in sample has nowhere to go.
 fn save_note(state: &Rc<State>) {
     if !state.dirty.get() {
-        state.status.set_text("No changes");
+        say(state, "No changes");
         return;
     }
     let text = state.editor.text();
@@ -2003,13 +2386,14 @@ fn save_note(state: &Rc<State>) {
     match saved {
         Some(name) => {
             state.dirty.set(false);
-            state.status.set_text(&format!("Saved {name}"));
+            say(state, &format!("Saved {name}"));
             refresh_titles(state);
             refresh_backlinks(state);
             refresh_broken(state);
+            refresh_git(state);
             refresh_window_title(state);
         }
-        None => state.status.set_text("Nothing to save"),
+        None => say(state, "Nothing to save"),
     }
 }
 
@@ -2021,7 +2405,7 @@ fn save_current_note(state: &Rc<State>, text: &str) -> Option<String> {
 
     if let Err(err) = session.vault.write_note(&rel, text) {
         eprintln!("jotter: could not save {}: {err}", rel.display());
-        state.status.set_text("Save failed");
+        say(state, "Save failed");
         return None;
     }
     if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, &rel) {
@@ -2035,7 +2419,7 @@ fn save_single_file(state: &Rc<State>, text: &str) -> Option<String> {
     let path = state.single_file.borrow().clone()?;
     if let Err(err) = std::fs::write(&path, text) {
         eprintln!("jotter: could not save {}: {err}", path.display());
-        state.status.set_text("Save failed");
+        say(state, "Save failed");
         return None;
     }
     Some(path.display().to_string())
@@ -2132,7 +2516,7 @@ fn start_indexing(state: &Rc<State>, root: &Path) {
                     status.set_text(&format!("Indexing {done}/{total}"));
                 }
                 Ok(IndexProgress::Done { total }) => {
-                    status.set_text(&format!("Indexed {total} notes"));
+                    status.set_text(&indexed_text(i64::try_from(total).unwrap_or(i64::MAX)));
                     // Links that looked broken against a partial index may resolve now.
                     refresh_links(&index_state);
                     if index_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
@@ -2813,11 +3197,18 @@ fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str
 
 #[cfg(test)]
 mod tests {
-    use super::{broken_label, delete_question};
+    use super::{broken_label, delete_question, indexed_text};
 
     #[test]
     fn one_broken_link_reads_singular() {
         assert_eq!(broken_label(1), "1 broken link");
+    }
+
+    #[test]
+    fn a_single_note_is_not_plural() {
+        assert_eq!(indexed_text(1), "Indexed 1 note");
+        assert_eq!(indexed_text(0), "Indexed 0 notes");
+        assert_eq!(indexed_text(42), "Indexed 42 notes");
     }
 
     #[test]

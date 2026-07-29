@@ -420,7 +420,8 @@ Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
 Ctrl+/ toggle line comment,
 Ctrl+H keybinding sheet (phase 6), Ctrl+K insert link,
 Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
-F2 rename, Ctrl+G S stage all, Ctrl+G C commit, Ctrl+G P push, Ctrl+G F pull.
+F2 rename, Ctrl+Shift+G sync vault (commit all, pull, push as one action;
+the planned Ctrl+G chords went with the separate stage and push actions).
 
 ## Startup sequence (implement in phase 2, complete by phase 5)
 

@@ -48,6 +48,8 @@ entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: non
 row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.status-git {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-family: {editor_font};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
+.status-git:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .status-broken {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {danger};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
 .status-broken:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .backlinks {{\n  background-color: {bg};\n}}\n\n\

@@ -1000,6 +1000,7 @@ dependencies = [
  "anyhow",
  "gtk4",
  "jotter-editor",
+ "jotter-git",
  "jotter-index",
  "jotter-parser",
  "jotter-preview",

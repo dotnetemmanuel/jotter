@@ -178,6 +178,22 @@ popover > contents {
   background-color: alpha(#1c1e26, 0.45);
 }
 
+.status-git {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #6c6f93;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+  padding: 0 8px;
+  min-height: 0;
+}
+
+.status-git:hover {
+  background: none;
+  color: #ee64ac;
+}
+
 .status-broken {
   background: none;
   border: none;
