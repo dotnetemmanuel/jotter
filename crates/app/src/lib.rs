@@ -3,6 +3,7 @@
 //! edit-preview toggle loop, and (in vault mode) the file tree, background index,
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
+mod appearance;
 mod backlinks;
 mod commands;
 mod complete;
@@ -14,10 +15,13 @@ mod git_panel;
 mod git_status;
 mod links;
 mod picker;
+mod rail;
 mod results;
 mod search;
 mod search_panel;
+mod settings;
 mod switcher;
+mod themes;
 mod title;
 mod tree;
 mod vault_session;
@@ -92,7 +96,7 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 8] = [
+const PALETTE_COMMANDS: [(&str, &str); 9] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
@@ -101,6 +105,7 @@ const PALETTE_COMMANDS: [(&str, &str); 8] = [
     ("tags", "Browse tags"),
     ("search", "Search notes"),
     ("broken-links", "Show broken links"),
+    ("settings", "Settings"),
 ];
 
 /// Fallback document shown when no path is given or a read fails.
@@ -143,8 +148,9 @@ struct State {
     stack: Stack,
     /// Active resolved theme; swapped in place on a light/dark toggle.
     theme: RefCell<Theme>,
-    /// Parsed theme source, re-resolved for the other mode on toggle.
-    theme_file: ThemeFile,
+    /// Parsed theme source, re-resolved on a mode toggle and replaced when the
+    /// user picks another theme.
+    theme_file: RefCell<ThemeFile>,
     /// Display-level chrome CSS provider, restyled in place on toggle.
     chrome_provider: CssProvider,
     /// Caret line (0-based) cached when leaving the editor, restored on return.
@@ -193,6 +199,11 @@ struct State {
     report_panel: Rc<drill::Panel>,
     /// The git page: what changed since the last commit.
     git_panel: Rc<git_panel::Panel>,
+    /// The icon rail at the left edge, outside everything Ctrl+B collapses.
+    rail: Rc<rail::Rail>,
+    /// The settings window while it is open: the cogwheel toggles it, and a
+    /// theme change made elsewhere is reflected back into its controls.
+    settings: RefCell<Option<settings::Handle>>,
     /// The conflict resolver, which takes the main pane while a rebase is stuck.
     conflict: Rc<conflict_view::View>,
     /// Pending debounced search, replaced on each keystroke.
@@ -277,17 +288,21 @@ fn install_chrome_css(theme: &Theme) -> CssProvider {
 
 /// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
 fn build_ui(app: &Application, path_arg: Option<&str>) {
-    let theme_file = match jotter_theming::bundled::default_theme_file() {
+    let config = Config::load();
+    let wanted = config.appearance.theme.clone().unwrap_or_else(|| {
+        jotter_theming::bundled::DEFAULT_ID.to_string()
+    });
+    let theme_file = match themes::load(&wanted) {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("jotter: could not load default theme: {err}");
+            eprintln!("jotter: could not load theme {wanted}: {err}");
             return;
         }
     };
-    let theme = match theme_file.resolve(jotter_theming::bundled::DEFAULT_MODE) {
+    let theme = match appearance::resolve(&theme_file, &config.appearance) {
         Ok(theme) => theme,
         Err(err) => {
-            eprintln!("jotter: could not resolve default theme: {err}");
+            eprintln!("jotter: could not resolve theme {wanted}: {err}");
             return;
         }
     };
@@ -323,8 +338,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     stack.add_named(&conflict.widget(), Some(PAGE_CONFLICT));
 
     let backlinks = build_backlinks(&theme.chrome.accent, &opened);
+    let rail = build_rail(&opened);
 
-    let config = Config::load();
     let startup = resolve_startup(path_arg, &config);
 
     let state = Rc::new(State {
@@ -332,7 +347,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         preview,
         stack: stack.clone(),
         theme: RefCell::new(theme),
-        theme_file,
+        theme_file: RefCell::new(theme_file),
         chrome_provider,
         cached_caret: RefCell::new(0),
         pending: RefCell::new(None),
@@ -357,6 +372,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         tags_panel: pages.tags,
         report_panel: pages.report,
         git_panel: pages.git,
+        rail: Rc::clone(&rail),
+        settings: RefCell::new(None),
         conflict: Rc::clone(&conflict),
         search_pending: RefCell::new(None),
         git_tx: RefCell::new(None),
@@ -388,12 +405,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .position(240)
         .build();
 
-    let root_box = gtk::Box::new(Orientation::Vertical, 0);
-    root_box.append(&paned);
-    root_box.append(&gtk::Separator::new(Orientation::Horizontal));
-    root_box.append(&status_bar);
-    paned.set_vexpand(true);
-    state.overlay.set_child(Some(&root_box));
+    state.overlay.set_child(Some(&assemble(&rail.widget(), &paned, &status_bar)));
 
     present_window(app, &state);
 }
@@ -437,6 +449,23 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
     (bar, status, broken, git)
 }
 
+/// Lays the window out: rail, then the paned area, with the status bar under
+/// both. The rail sits outside the paned area, so `Ctrl+B` collapses the tree
+/// and leaves the rail where it is.
+fn assemble(rail: &gtk::Widget, paned: &Paned, status_bar: &gtk::Box) -> gtk::Box {
+    let with_rail = gtk::Box::new(Orientation::Horizontal, 0);
+    with_rail.append(rail);
+    with_rail.append(&gtk::Separator::new(Orientation::Vertical));
+    with_rail.append(paned);
+    with_rail.set_vexpand(true);
+
+    let root = gtk::Box::new(Orientation::Vertical, 0);
+    root.append(&with_rail);
+    root.append(&gtk::Separator::new(Orientation::Horizontal));
+    root.append(status_bar);
+    root
+}
+
 /// Builds the window around the already-assembled layout and shows it.
 fn present_window(app: &Application, state: &Rc<State>) {
     let window = ApplicationWindow::builder()
@@ -447,6 +476,27 @@ fn present_window(app: &Application, state: &Rc<State>) {
         .child(&state.overlay)
         .build();
     window.set_titlebar(Some(&HeaderBar::new()));
+
+    // Settings is a separate toplevel, so a keypress can land here rather than
+    // on it. Escape closes it from either window: one state, open or closed.
+    let escaping = Rc::clone(state);
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, _| {
+        let open = escaping
+            .settings
+            .borrow()
+            .as_ref()
+            .map(|handle| handle.window.clone());
+        if key == gdk::Key::Escape
+            && let Some(settings) = open
+        {
+            settings.close();
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    window.add_controller(keys);
     wire_preview_zoom(&window, state);
     wire_save_on_close(&window, state);
     window.present();
@@ -1342,7 +1392,17 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_tags(app, state);
     wire_report(app, state);
     wire_git(app, state);
+    wire_settings(app, state);
     wire_editor_escape(state);
+}
+
+/// Install the settings action, which the rail cogwheel also triggers.
+fn wire_settings(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("settings", None);
+    let opening = Rc::clone(state);
+    action.connect_activate(move |_, _| open_settings(&opening));
+    app.add_action(&action);
+    app.set_accels_for_action("app.settings", &["<Primary>comma"]);
 }
 
 /// Install the git actions and the status-bar segment behind them.
@@ -1731,6 +1791,65 @@ struct Sidebar {
     report: Rc<drill::Panel>,
     git: Rc<git_panel::Panel>,
     stack: Stack,
+}
+
+/// Builds the rail, acting through the state once it exists.
+fn build_rail(opened: &LateState) -> Rc<rail::Rail> {
+    let toggling = Rc::clone(opened);
+    let opening = Rc::clone(opened);
+    rail::Rail::new(
+        move |wanted| {
+            let state = toggling.borrow().clone();
+            if let Some(state) = state {
+                state.sidebar_stack.set_visible(wanted);
+            }
+        },
+        move || {
+            let state = opening.borrow().clone();
+            if let Some(state) = state {
+                open_settings(&state);
+            }
+        },
+    )
+}
+
+/// Opens the settings window, or closes it when it is already open.
+///
+/// The same key both ways, like every other panel jotter opens.
+fn open_settings(state: &Rc<State>) {
+    let open = state.settings.borrow().as_ref().map(|handle| handle.window.clone());
+    if let Some(window) = open {
+        window.close();
+        return;
+    }
+    let Some(parent) = state.overlay.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+
+    let ids: Vec<String> = themes::available()
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    let current = state.theme_file.borrow().id.clone();
+    let mode = state.theme.borrow().mode;
+
+    let changing = Rc::clone(state);
+    let handle = settings::open(&parent, &ids, &current, mode, move |change| match change {
+        settings::Change::Theme(id) => set_theme(&changing, &id),
+        settings::Change::Mode(mode) => set_theme_mode(&changing, mode),
+    });
+    let window = handle.window.clone();
+
+    // An application window, so app accelerators (Ctrl+, among them) reach it.
+    // Without this the dialog is deaf to them and, being modal, so is the parent.
+    window.set_application(Some(&state.app));
+
+    let closing = Rc::clone(state);
+    window.connect_close_request(move |_| {
+        closing.settings.replace(None);
+        gtk::glib::Propagation::Proceed
+    });
+    state.settings.replace(Some(handle));
 }
 
 /// Builds the conflict resolver, acting through the state once it exists.
@@ -2285,6 +2404,8 @@ fn wire_sidebar_toggle(app: &Application, state: &Rc<State>) {
     action.connect_activate(move |_, _| {
         let visible = sidebar_state.sidebar_stack.get_visible();
         sidebar_state.sidebar_stack.set_visible(!visible);
+        // The rail button shows what the tree is doing, however it was toggled.
+        sidebar_state.rail.set_notes_active(!visible);
     });
     app.add_action(&action);
     app.set_accels_for_action("app.toggle-sidebar", &["<Primary>b"]);
@@ -2306,14 +2427,60 @@ fn toggle_theme_mode(state: &Rc<State>) {
         Mode::Dark => Mode::Light,
         Mode::Light => Mode::Dark,
     };
-    let next = match state.theme_file.resolve(next_mode) {
-        Ok(theme) => theme,
+    set_theme_mode(state, next_mode);
+}
+
+/// Switches to `mode`, remembering it for next time.
+fn set_theme_mode(state: &Rc<State>, mode: Mode) {
+    {
+        let mut config = state.config.borrow_mut();
+        config.appearance.mode = Some(appearance::mode_name(mode).to_string());
+        config.save();
+    }
+    let next = {
+        let file = state.theme_file.borrow();
+        match appearance::resolve(&file, &state.config.borrow().appearance) {
+            Ok(theme) => theme,
+            Err(err) => {
+                eprintln!("jotter: could not switch theme mode: {err}");
+                return;
+            }
+        }
+    };
+    apply_theme(state, next);
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_mode(mode);
+    }
+}
+
+/// Loads `id` and applies it, remembering it for next time.
+fn set_theme(state: &Rc<State>, id: &str) {
+    let file = match themes::load(id) {
+        Ok(file) => file,
         Err(err) => {
-            eprintln!("jotter: could not switch theme mode: {err}");
+            eprintln!("jotter: could not load theme {id}: {err}");
+            say(state, &format!("Could not load theme {id}"));
             return;
         }
     };
+    {
+        let mut config = state.config.borrow_mut();
+        config.appearance.theme = Some(id.to_string());
+        config.save();
+    }
+    let next = match appearance::resolve(&file, &state.config.borrow().appearance) {
+        Ok(theme) => theme,
+        Err(err) => {
+            eprintln!("jotter: could not resolve theme {id}: {err}");
+            return;
+        }
+    };
+    *state.theme_file.borrow_mut() = file;
+    apply_theme(state, next);
+}
 
+/// Repaints every surface for `next` and keeps it as the active theme.
+fn apply_theme(state: &Rc<State>, next: Theme) {
     apply_chrome_css(&state.chrome_provider, &next);
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);

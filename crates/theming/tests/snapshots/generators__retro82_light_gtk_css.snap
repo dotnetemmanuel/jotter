@@ -89,6 +89,13 @@ button:hover {
   background-color: #d8c49a;
 }
 
+button:checked {
+  background-color: #d9762b;
+  background-image: none;
+  color: #f6e8cd;
+  border-color: #d9762b;
+}
+
 button.suggested-action {
   background-color: #24404f;
   background-image: none;
@@ -176,6 +183,79 @@ popover > contents {
 
 .picker-scrim {
   background-color: alpha(#f6e8cd, 0.45);
+}
+
+.rail {
+  background-color: #f6e8cd;
+  padding: 10px 6px;
+}
+
+.rail-button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #5f7d84;
+  padding: 10px 4px;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 3px;
+}
+
+.rail-button label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 21px;
+  padding-bottom: 1px;
+  border-bottom: 2px solid transparent;
+}
+
+.rail-button:hover {
+  background-color: #d8c49a;
+  color: #24404f;
+}
+
+.rail-button:checked {
+  background: none;
+  color: #d9762b;
+}
+
+.rail-button:checked label {
+  border-bottom-color: #d9762b;
+}
+
+.rail-settings {
+  padding-left: 3px;
+  padding-right: 6px;
+}
+
+.settings {
+  background-color: #f6e8cd;
+}
+
+.settings-label {
+  color: #5f7d84;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #24404f;
+  padding: 4px 8px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.settings-close:hover {
+  background-color: #d8c49a;
+  border-radius: 3px;
+}
+
+.theme-button {
+  padding: 6px;
+}
+
+.theme-name {
+  font-size: 14px;
 }
 
 .conflict {
