@@ -6,6 +6,8 @@
 mod backlinks;
 mod commands;
 mod complete;
+mod conflict_model;
+mod conflict_view;
 mod config;
 mod drill;
 mod git_panel;
@@ -53,6 +55,8 @@ const APP_ID: &str = "dev.jotter.Jotter";
 const PAGE_EDIT: &str = "edit";
 /// Stack page name for the preview.
 const PAGE_PREVIEW: &str = "preview";
+/// Stack page name for the conflict resolver, shown only mid-rebase.
+const PAGE_CONFLICT: &str = "conflict";
 
 /// Sidebar page names: the file tree, search, tags, and the broken-link report.
 const PAGE_TREE: &str = "tree";
@@ -189,6 +193,8 @@ struct State {
     report_panel: Rc<drill::Panel>,
     /// The git page: what changed since the last commit.
     git_panel: Rc<git_panel::Panel>,
+    /// The conflict resolver, which takes the main pane while a rebase is stuck.
+    conflict: Rc<conflict_view::View>,
     /// Pending debounced search, replaced on each keystroke.
     search_pending: RefCell<Option<SourceId>>,
     /// Long-lived sender for git news, kept so the channel outlives a worker.
@@ -312,6 +318,10 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
 
+    // Built here because it needs the same late-bound state the sidebar rows use.
+    let conflict = build_conflict_view(&opened);
+    stack.add_named(&conflict.widget(), Some(PAGE_CONFLICT));
+
     let backlinks = build_backlinks(&theme.chrome.accent, &opened);
 
     let config = Config::load();
@@ -347,6 +357,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         tags_panel: pages.tags,
         report_panel: pages.report,
         git_panel: pages.git,
+        conflict: Rc::clone(&conflict),
         search_pending: RefCell::new(None),
         git_tx: RefCell::new(None),
         git_generation: Cell::new(0),
@@ -971,6 +982,13 @@ fn refresh_git(state: &Rc<State>) {
 /// The buffer is written first: committing what is on disk while the editor
 /// holds something newer would quietly commit the wrong thing.
 fn sync_vault(state: &Rc<State>) {
+    // Syncing with a rebase half-finished cannot work, so the press means "get
+    // me back to the thing in the way" rather than "tell me no".
+    if rebase_pending(state) {
+        enter_conflicts(state);
+        say(state, "Finish the conflict first, then sync again.");
+        return;
+    }
     if state.dirty.get() {
         save_note(state);
     }
@@ -1018,11 +1036,13 @@ fn show_sync_outcome(state: &Rc<State>, outcome: Result<jotter_git::SyncReport, 
     refresh_tree(state);
     refresh_git(state);
 
+    reload_current_note(state);
     match outcome {
         Ok(report) => {
             say(state, &git_status::sync_summary(&report));
             if !report.conflicts.is_empty() {
                 open_git_page(state);
+                enter_conflicts(state);
             }
         }
         Err(err) => {
@@ -1051,6 +1071,19 @@ fn open_git_page(state: &Rc<State>) {
     if !state.session.borrow().as_ref().is_some_and(|s| s.is_git) {
         return;
     }
+    refresh_git_page(state);
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_GIT);
+    state.git_panel.focus_list();
+}
+
+/// Fills the git page: the conflicted notes while a rebase is stuck, otherwise
+/// what has changed since the last commit.
+fn refresh_git_page(state: &Rc<State>) {
+    if rebase_pending(state) {
+        state.git_panel.show_conflicts(&state.conflict.file_progress());
+        return;
+    }
     let changed = state
         .git_last
         .borrow()
@@ -1058,9 +1091,21 @@ fn open_git_page(state: &Rc<State>) {
         .map(|status| status.changed.clone())
         .unwrap_or_default();
     state.git_panel.show(&changed);
-    state.sidebar_stack.set_visible(true);
-    state.sidebar_stack.set_visible_child_name(PAGE_GIT);
-    state.git_panel.focus_list();
+}
+
+/// A row of the git page: the resolver while conflicted, the note otherwise.
+fn open_git_row(state: &Rc<State>, path: &str, line: i32) {
+    let conflicted = state
+        .git_last
+        .borrow()
+        .as_ref()
+        .is_some_and(|status| status.conflicts.iter().any(|held| held == path));
+    if conflicted {
+        state.conflict.focus_file(path);
+        enter_conflicts(state);
+        return;
+    }
+    open_search_hit(state, path, line);
 }
 
 /// Applies a status that arrived from the worker.
@@ -1068,10 +1113,11 @@ fn show_git_status(state: &Rc<State>, status: jotter_git::Status) {
     state.git.set_label(&git_status::label(&status));
     state.git.set_tooltip_text(Some(&git_status::tooltip(&status)));
     state.git.set_visible(true);
-    if state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT) {
-        state.git_panel.show(&status.changed);
-    }
+    let showing = state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT);
     state.git_last.replace(Some(status));
+    if showing {
+        refresh_git_page(state);
+    }
 }
 
 /// Says something in the status bar and holds it there for a few seconds.
@@ -1318,6 +1364,11 @@ fn wire_git(app: &Application, state: &Rc<State>) {
     // Shift as well as Control: sync rewrites history, so it should not sit
     // one slip away from a common key.
     app.set_accels_for_action("app.git-sync", &["<Primary><Shift>g"]);
+
+    let conflicts = gio::SimpleAction::new("git-conflicts", None);
+    let resolving = Rc::clone(state);
+    conflicts.connect_activate(move |_, _| enter_conflicts(&resolving));
+    app.add_action(&conflicts);
 
     let page = gio::SimpleAction::new("git-changes", None);
     let showing = Rc::clone(state);
@@ -1633,7 +1684,13 @@ fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
         open_through(&opened),
     );
 
-    let git = git_panel::Panel::new(accent, open_through(&opened));
+    let git_target = Rc::clone(&opened);
+    let git = git_panel::Panel::new(accent, move |path, line| {
+        let state = git_target.borrow().clone();
+        if let Some(state) = state {
+            open_git_row(&state, path, line);
+        }
+    });
 
     let stack = Stack::new();
     stack.add_named(tree, Some(PAGE_TREE));
@@ -1674,6 +1731,181 @@ struct Sidebar {
     report: Rc<drill::Panel>,
     git: Rc<git_panel::Panel>,
     stack: Stack,
+}
+
+/// Builds the conflict resolver, acting through the state once it exists.
+fn build_conflict_view(opened: &LateState) -> Rc<conflict_view::View> {
+    let target = Rc::clone(opened);
+    conflict_view::View::new(move |request| {
+        let state = target.borrow().clone();
+        if let Some(state) = state {
+            handle_conflict_request(&state, &request);
+        }
+    })
+}
+
+/// Acts on what the resolver asked for.
+fn handle_conflict_request(state: &Rc<State>, request: &conflict_view::Request) {
+    match request {
+        conflict_view::Request::Answered => write_answers(state),
+        conflict_view::Request::Continue => {
+            write_answers(state);
+            finish_rebase(state);
+        }
+        conflict_view::Request::Abort => abort_rebase(state),
+        conflict_view::Request::Leave => {
+            leave_conflicts(state);
+            say(state, "Conflict still pending. Ctrl+Shift+G returns to it.");
+        }
+    }
+}
+
+/// Writes every answer to disk, staging the notes that are fully answered.
+fn write_answers(state: &Rc<State>) {
+    if state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT) {
+        state.git_panel.show_conflicts(&state.conflict.file_progress());
+    }
+    let Some(repo) = vault_repo(state) else {
+        return;
+    };
+    for (path, choices) in state.conflict.answers() {
+        let spans = match repo.conflict_spans(&path) {
+            Ok(spans) => spans,
+            Err(err) => {
+                eprintln!("jotter: could not read {path}: {err}");
+                continue;
+            }
+        };
+        if let Err(err) = repo.write_resolved(&path, &spans, &choices) {
+            eprintln!("jotter: could not resolve {path}: {err}");
+            say(state, &format!("Could not resolve {path}: {err}"));
+        }
+    }
+}
+
+/// Replays the rest of the rebase, reporting either way.
+fn finish_rebase(state: &Rc<State>) {
+    let Some(repo) = vault_repo(state) else {
+        return;
+    };
+    match repo.continue_rebase() {
+        Ok(()) => {
+            leave_conflicts(state);
+            reload_current_note(state);
+            say(state, "Conflicts resolved, rebase finished. Sync again to push.");
+        }
+        Err(err) => {
+            eprintln!("jotter: could not continue the rebase: {err}");
+            say(state, &format!("Could not continue: {err}"));
+        }
+    }
+    refresh_tree(state);
+    refresh_git(state);
+}
+
+/// Unwinds the sync that conflicted, putting the vault back.
+fn abort_rebase(state: &Rc<State>) {
+    let Some(repo) = vault_repo(state) else {
+        return;
+    };
+    match repo.abort_rebase() {
+        Ok(()) => {
+            leave_conflicts(state);
+            reload_current_note(state);
+            say(state, "Sync undone. Your notes are as they were.");
+        }
+        Err(err) => say(state, &format!("Could not abort: {err}")),
+    }
+    refresh_tree(state);
+    refresh_git(state);
+}
+
+/// Rereads the open note from disk, unless the buffer has unsaved edits.
+///
+/// A rebase rewrites notes underneath the editor, so without this the buffer
+/// keeps showing conflict markers for a file that no longer has any.
+fn reload_current_note(state: &Rc<State>) {
+    if state.dirty.get() {
+        return;
+    }
+    let current = state
+        .session
+        .borrow()
+        .as_ref()
+        .and_then(|session| session.current.borrow().clone());
+    if let Some(rel) = current {
+        load_note(state, &rel);
+    }
+}
+
+/// Whether a rebase is waiting to be finished or abandoned.
+fn rebase_pending(state: &Rc<State>) -> bool {
+    state
+        .git_last
+        .borrow()
+        .as_ref()
+        .is_some_and(|status| status.rebase_in_progress)
+}
+
+/// The repository of the open vault, if it has one.
+fn vault_repo(state: &Rc<State>) -> Option<jotter_git::Repo> {
+    let root = state
+        .session
+        .borrow()
+        .as_ref()
+        .filter(|session| session.is_git)
+        .map(|session| session.vault.root().to_path_buf())?;
+    jotter_git::Repo::discover(&root)
+}
+
+/// Shows the resolver over the editor, loading the conflicted notes into it.
+fn enter_conflicts(state: &Rc<State>) {
+    let Some(repo) = vault_repo(state) else {
+        return;
+    };
+    // Some means a rebase is in progress; empty means every block has been
+    // answered and staged, which is precisely when the user still needs the page
+    // to press Continue. Rebuilding from disk then would wipe their answers.
+    let Some(paths) = repo.conflict_state() else {
+        return;
+    };
+    if !paths.is_empty() {
+        let files: Vec<conflict_model::File> = paths
+            .into_iter()
+            .filter_map(|path| {
+                let spans = repo
+                    .conflict_spans(&path)
+                    .map_err(|err| eprintln!("jotter: could not read {path}: {err}"))
+                    .ok()?;
+                Some(conflict_model::File::new(path, spans))
+            })
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        state.conflict.set_model(conflict_model::Model::new(files));
+    }
+    state.conflict.allow_continue(true);
+    // The rail counts what the resolver holds, so it follows the rebuild rather
+    // than showing the answers of a model that no longer exists.
+    if state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT) {
+        state.git_panel.show_conflicts(&state.conflict.file_progress());
+    }
+    state.stack.set_visible_child_name(PAGE_CONFLICT);
+    // The page has not been laid out yet, and an unrealised widget refuses
+    // focus, which would leave every key going to whatever held it before.
+    let focusing = Rc::clone(state);
+    gtk::glib::idle_add_local_once(move || {
+        focusing.conflict.widget().grab_focus();
+    });
+}
+
+/// Puts the editor back, whether the conflict was settled or just left alone.
+fn leave_conflicts(state: &Rc<State>) {
+    if state.stack.visible_child_name().as_deref() == Some(PAGE_CONFLICT) {
+        state.stack.set_visible_child_name(PAGE_EDIT);
+        state.editor.grab_focus();
+    }
 }
 
 /// Builds the backlinks strip, opening notes through the state once it exists.
@@ -1974,11 +2206,13 @@ fn git_commands(state: &Rc<State>) -> Vec<(&'static str, &'static str)> {
         return Vec::new();
     };
 
-    let mut commands = vec![
-        ("git-sync", "Sync vault"),
-        ("git-changes", "Show changed notes"),
-        ("git-refresh", "Refresh git status"),
-    ];
+    let mut commands = vec![("git-sync", "Sync vault")];
+    // Only while a rebase is actually stuck: an empty resolver helps nobody.
+    if rebase_pending(state) {
+        commands.push(("git-conflicts", "Resolve conflicts"));
+    }
+    commands.push(("git-changes", "Show changed notes"));
+    commands.push(("git-refresh", "Refresh git status"));
     // Only worth offering where it would do something: a vault committed before
     // jotter wrote its ignore files.
     if jotter_git::Repo::discover(&root).is_some_and(|repo| repo.tracks_jotter()) {

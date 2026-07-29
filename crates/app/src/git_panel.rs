@@ -95,6 +95,24 @@ impl Panel {
         self.heading.set_text(&heading_text(changed.len()));
     }
 
+    /// Lists the conflicted notes and how far each one has been answered.
+    pub fn show_conflicts(&self, files: &[(String, usize, usize)]) {
+        let hits: Vec<Hit> = files
+            .iter()
+            .map(|(path, answered, total)| Hit {
+                path: path.clone(),
+                snippets: Vec::new(),
+                badge: Some(if answered == total {
+                    "\u{2713}".to_string()
+                } else {
+                    format!("{answered}/{total}")
+                }),
+            })
+            .collect();
+        self.changed.set_hits(&hits);
+        self.heading.set_text(&conflict_heading(files.len()));
+    }
+
     /// Puts focus on the list so the arrows work straight away.
     pub fn focus_list(&self) {
         self.changed.focus_first();
@@ -120,6 +138,14 @@ impl Panel {
     }
 }
 
+/// The line above the list while a rebase is stuck.
+fn conflict_heading(count: usize) -> String {
+    match count {
+        1 => "1 note conflicts".to_string(),
+        many => format!("{many} notes conflict"),
+    }
+}
+
 /// The line above the list.
 fn heading_text(count: usize) -> String {
     match count {
@@ -131,7 +157,13 @@ fn heading_text(count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::heading_text;
+    use super::{conflict_heading, heading_text};
+
+    #[test]
+    fn one_conflicted_note_reads_singular() {
+        assert_eq!(conflict_heading(1), "1 note conflicts");
+        assert_eq!(conflict_heading(3), "3 notes conflict");
+    }
 
     #[test]
     fn a_committed_vault_says_nothing_changed() {

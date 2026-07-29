@@ -148,6 +148,8 @@ mod tests {
                     kind: ChangeKind::Modified,
                 })
                 .collect(),
+            conflicts: Vec::new(),
+            rebase_in_progress: false,
         }
     }
 

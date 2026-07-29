@@ -178,6 +178,74 @@ popover > contents {
   background-color: alpha(#1c1e26, 0.45);
 }
 
+.conflict {
+  background-color: #1c1e26;
+  padding: 10px 12px;
+}
+
+.conflict-header {
+  padding-bottom: 4px;
+  border-bottom: 2px solid #2e303e;
+}
+
+.conflict-heading {
+  font-weight: bold;
+}
+
+.conflict-progress {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.conflict-title {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.conflict-title.conflict-incoming {
+  color: #26bbd9;
+}
+
+.conflict-title.conflict-yours {
+  color: #ee64ac;
+}
+
+.conflict-title.conflict-resolution {
+  color: #fadad1;
+}
+
+.conflict-body {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  border-radius: 3px;
+  padding: 6px 8px;
+}
+
+.conflict-body.conflict-incoming, .conflict-body.conflict-incoming text {
+  background-color: alpha(#26bbd9, 0.12);
+  color: #fadad1;
+}
+
+.conflict-body.conflict-yours, .conflict-body.conflict-yours text {
+  background-color: alpha(#ee64ac, 0.12);
+  color: #fadad1;
+}
+
+.conflict-body.conflict-resolution, .conflict-body.conflict-resolution text {
+  background-color: #232530;
+  color: #fadad1;
+}
+
+.conflict-actions {
+  padding-top: 4px;
+}
+
+.conflict-action {
+  padding: 4px 10px;
+}
+
 .status-git {
   background: none;
   border: none;

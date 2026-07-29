@@ -15,11 +15,14 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+pub mod conflict;
 mod ignore;
+mod resolve;
 mod run;
 mod sync;
 
 pub use ignore::write_ignores;
+pub use resolve::Side;
 pub use sync::SyncReport;
 
 /// Errors surfaced by the crate.
@@ -87,6 +90,11 @@ pub struct Status {
     pub behind: usize,
     /// Changed paths, sorted, so the list does not reshuffle between polls.
     pub changed: Vec<Change>,
+    /// Paths a rebase stopped on. Non-empty means one is waiting to be resolved.
+    pub conflicts: Vec<String>,
+    /// Whether a rebase is unfinished, which stays true once every block has
+    /// been answered and staged and `conflicts` has gone empty again.
+    pub rebase_in_progress: bool,
 }
 
 impl Status {
@@ -158,6 +166,7 @@ impl Repo {
             .collect();
         changed.sort_by(|one, other| one.path.cmp(&other.path));
 
+        let conflicts = self.conflict_state();
         let (ahead, behind) = self.tracking()?;
         Ok(Status {
             branch: self.branch_name(),
@@ -165,6 +174,8 @@ impl Repo {
             ahead,
             behind,
             changed,
+            conflicts: conflicts.clone().unwrap_or_default(),
+            rebase_in_progress: conflicts.is_some(),
         })
     }
 
