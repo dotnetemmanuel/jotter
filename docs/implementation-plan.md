@@ -375,10 +375,9 @@ Same fallback for partial clone, sparse checkout, and awkward rebases.
 
 Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
 
-- **Keybinding sheet on `Ctrl+K`.** A dialog listing every binding the app has,
+- **Keybinding sheet on `Ctrl+H`.** A dialog listing every binding the app has,
   read from the same table that registers the accelerators so it cannot drift.
-  This takes `Ctrl+K` from insert link, which needs a new home: decide when the
-  phase starts.
+  `Ctrl+H` for help, chosen so insert link keeps `Ctrl+K`.
 - **Icon rail left of the file tree.** Always visible, notes icon at the top and
   a cogwheel at the bottom. `Ctrl+B` keeps collapsing only the tree, so the rail
   stays put and the sidebar stack moves inside it. The rail is a third column in
@@ -407,7 +406,7 @@ Ctrl+O quick switcher, Ctrl+P command palette, Ctrl+Shift+F full-text search,
 Ctrl+N new note (current folder), Ctrl+Shift+N new note (root), Ctrl+S save,
 Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
 Ctrl+/ toggle line comment,
-Ctrl+K keybinding sheet (phase 6; insert link moves elsewhere),
+Ctrl+H keybinding sheet (phase 6), Ctrl+K insert link,
 Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
 F2 rename, Ctrl+G S stage all, Ctrl+G C commit, Ctrl+G P push, Ctrl+G F pull.
 
