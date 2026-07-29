@@ -68,6 +68,27 @@ impl List {
         self.hits.borrow().len()
     }
 
+    /// Selects a row and focuses it, so the arrows move from there: the selected
+    /// one where there is one, else the first.
+    ///
+    /// Focusing the list alone leaves nothing selected, and the first arrow press
+    /// then goes nowhere.
+    pub fn focus_first(&self) {
+        let row = self
+            .rows
+            .selected_row()
+            .or_else(|| self.rows.row_at_index(0));
+        match row {
+            Some(row) => {
+                self.rows.select_row(Some(&row));
+                row.grab_focus();
+            }
+            None => {
+                self.rows.grab_focus();
+            }
+        }
+    }
+
     /// Recolors the matched words after a theme change, redrawing the rows.
     pub fn set_accent(&self, accent: &str) {
         self.accent.replace(accent.to_string());
@@ -75,8 +96,10 @@ impl List {
         self.set_hits(&hits);
     }
 
-    /// Replaces the rows with `hits`.
+    /// Replaces the rows with `hits`, keeping the selected line where it survives.
     pub fn set_hits(&self, hits: &[Hit]) {
+        let was_selected = self.selected_target();
+        let had_focus = holds_focus_widget(&self.rows);
         while let Some(child) = self.rows.first_child() {
             self.rows.remove(&child);
         }
@@ -93,6 +116,49 @@ impl List {
 
         *self.targets.borrow_mut() = targets;
         *self.hits.borrow_mut() = hits.to_vec();
+
+        let restored = was_selected.and_then(|target| self.row_for(&target));
+        if let Some(row) = &restored {
+            self.rows.select_row(Some(row));
+        }
+        if had_focus && let Some(row) = restored.or_else(|| self.rows.row_at_index(0)) {
+            self.rows.select_row(Some(&row));
+            set_focus_widget(&row);
+        }
+    }
+
+    /// The note and line behind the selected row.
+    fn selected_target(&self) -> Option<(String, i32)> {
+        let index = usize::try_from(self.rows.selected_row()?.index()).ok()?;
+        self.targets.borrow().get(index).cloned()
+    }
+
+    /// The row leading to `target`, once the rows have been rebuilt.
+    fn row_for(&self, target: &(String, i32)) -> Option<gtk::ListBoxRow> {
+        let index = self.targets.borrow().iter().position(|held| held == target)?;
+        self.rows.row_at_index(i32::try_from(index).ok()?)
+    }
+}
+
+/// Whether the window's focus widget sits inside `parent`.
+///
+/// Not the same as focus-within: a window that is not active still remembers
+/// where the keyboard will land when it comes back, and a redraw that destroys
+/// that widget loses it silently.
+pub fn holds_focus_widget(parent: &impl IsA<gtk::Widget>) -> bool {
+    let Some(window) = parent.as_ref().root().and_downcast::<gtk::Window>() else {
+        return false;
+    };
+    let Some(focused) = GtkWindowExt::focus(&window) else {
+        return false;
+    };
+    focused.is_ancestor(parent)
+}
+
+/// Points the window's focus widget at `row`, without activating the window.
+pub fn set_focus_widget(row: &gtk::ListBoxRow) {
+    if let Some(window) = row.root().and_downcast::<gtk::Window>() {
+        GtkWindowExt::set_focus(&window, Some(row));
     }
 }
 

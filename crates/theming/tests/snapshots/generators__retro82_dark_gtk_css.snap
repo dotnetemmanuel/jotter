@@ -178,6 +178,21 @@ popover > contents {
   background-color: alpha(#05182e, 0.45);
 }
 
+.status-broken {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #f85525;
+  font-size: 14px;
+  padding: 0 8px;
+  min-height: 0;
+}
+
+.status-broken:hover {
+  background: none;
+  color: #faa968;
+}
+
 .backlinks {
   background-color: #05182e;
 }

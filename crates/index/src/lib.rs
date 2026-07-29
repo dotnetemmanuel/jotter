@@ -438,13 +438,15 @@ impl Index {
         Ok(notes)
     }
 
-    /// Returns each unresolved link target with the count of notes pointing at it.
+    /// Returns each unresolved link target with the count of notes pointing at it,
+    /// in alphabetical order.
     ///
     /// # Errors
     /// Returns [`IndexError::Sqlite`] on query failure.
     pub fn broken_links(&self) -> Result<Vec<(String, i64)>, IndexError> {
         let mut stmt = self.conn.prepare(
-            "SELECT dst_path, count(*) FROM links WHERE resolved = 0 GROUP BY dst_path",
+            "SELECT dst_path, count(DISTINCT src_note_id) FROM links
+             WHERE resolved = 0 GROUP BY dst_path ORDER BY dst_path",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut out = Vec::new();
@@ -452,6 +454,28 @@ impl Index {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Notes holding an unresolved link to `dst_path`, whole and sorted by path.
+    ///
+    /// The companion to [`Index::broken_links`], which names the targets but not
+    /// who points at them. A note pointing twice is listed once.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn broken_link_notes(&self, dst_path: &str) -> Result<Vec<Note>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT n.id, n.path, n.title, n.mtime, n.size, n.frontmatter
+             FROM links l JOIN notes n ON n.id = l.src_note_id
+             WHERE l.dst_path = ?1 AND l.resolved = 0
+             ORDER BY n.path",
+        )?;
+        let rows = stmt.query_map(params![dst_path], Self::map_note)?;
+        let mut notes = Vec::new();
+        for note in rows {
+            notes.push(note?);
+        }
+        Ok(notes)
     }
 
     /// Runs an `FTS5` `MATCH` and returns matching note ids (FTS rowids).
@@ -898,12 +922,55 @@ mod tests {
                 ],
             )
             .unwrap();
-        let mut broken = index.broken_links().unwrap();
-        broken.sort();
         assert_eq!(
-            broken,
+            index.broken_links().unwrap(),
             vec![("missing.md".to_string(), 2), ("other.md".to_string(), 1)]
         );
+    }
+
+    #[test]
+    fn a_note_pointing_twice_at_a_missing_target_counts_once() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(
+                a,
+                &[
+                    LinkRecord::unresolved("ghost"),
+                    LinkRecord::unresolved("ghost"),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            index.broken_links().unwrap(),
+            vec![("ghost".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn broken_link_notes_names_who_points_at_a_missing_target() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
+        index
+            .set_links(
+                a,
+                &[
+                    LinkRecord::unresolved("ghost"),
+                    LinkRecord::unresolved("ghost"),
+                ],
+            )
+            .unwrap();
+        index
+            .set_links(b, &[LinkRecord::resolved("a", "a.md")])
+            .unwrap();
+
+        let linkers = index.broken_link_notes("ghost").unwrap();
+        assert_eq!(
+            linkers.iter().map(|n| n.path.as_str()).collect::<Vec<_>>(),
+            ["a.md"]
+        );
+        assert!(index.broken_link_notes("a").unwrap().is_empty());
     }
 
     #[test]

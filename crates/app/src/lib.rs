@@ -7,12 +7,12 @@ mod backlinks;
 mod commands;
 mod complete;
 mod config;
+mod drill;
 mod links;
 mod picker;
 mod results;
 mod search;
 mod search_panel;
-mod tags_panel;
 mod switcher;
 mod title;
 mod tree;
@@ -52,10 +52,11 @@ const PAGE_EDIT: &str = "edit";
 /// Stack page name for the preview.
 const PAGE_PREVIEW: &str = "preview";
 
-/// Sidebar page names: the file tree, search, and tags.
+/// Sidebar page names: the file tree, search, tags, and the broken-link report.
 const PAGE_TREE: &str = "tree";
 const PAGE_SEARCH: &str = "search";
 const PAGE_TAGS: &str = "tags";
+const PAGE_REPORT: &str = "report";
 
 /// Debounce before a typed query hits the index, in milliseconds.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
@@ -80,7 +81,7 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 7] = [
+const PALETTE_COMMANDS: [(&str, &str); 8] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
@@ -88,6 +89,7 @@ const PALETTE_COMMANDS: [(&str, &str); 7] = [
     ("toggle-sidebar", "Toggle sidebar"),
     ("tags", "Browse tags"),
     ("search", "Search notes"),
+    ("broken-links", "Show broken links"),
 ];
 
 /// Fallback document shown when no path is given or a read fails.
@@ -132,6 +134,8 @@ struct State {
     sidebar: ScrolledWindow,
     /// The bottom status label (indexing progress, note counts).
     status: Label,
+    /// The broken-link count at the right of the status bar, hidden when zero.
+    broken: gtk::Button,
     /// The active vault session, absent in single-file mode.
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
@@ -161,7 +165,9 @@ struct State {
     /// The full-text search page.
     search_panel: Rc<search_panel::Panel>,
     /// The tag page.
-    tags_panel: Rc<tags_panel::Panel>,
+    tags_panel: Rc<drill::Panel>,
+    /// The broken-link report page.
+    report_panel: Rc<drill::Panel>,
     /// Pending debounced search, replaced on each keystroke.
     search_pending: RefCell<Option<SourceId>>,
 }
@@ -272,13 +278,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .build();
     // The stack carries `.sidebar`, so styling it here would draw a second border.
 
-    let status = Label::builder()
-        .halign(gtk::Align::Start)
-        .margin_start(8)
-        .margin_end(8)
-        .margin_top(2)
-        .margin_bottom(2)
-        .build();
+    let (status_bar, status, broken) = build_status_bar();
 
     let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
@@ -299,6 +299,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         pending: RefCell::new(None),
         sidebar: sidebar.clone(),
         status: status.clone(),
+        broken,
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
@@ -314,6 +315,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         sidebar_stack: sidebar_stack.clone(),
         search_panel: pages.search,
         tags_panel: pages.tags,
+        report_panel: pages.report,
         search_pending: RefCell::new(None),
     });
     opened.replace(Some(Rc::clone(&state)));
@@ -343,11 +345,37 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     let root_box = gtk::Box::new(Orientation::Vertical, 0);
     root_box.append(&paned);
     root_box.append(&gtk::Separator::new(Orientation::Horizontal));
-    root_box.append(&status);
+    root_box.append(&status_bar);
     paned.set_vexpand(true);
     state.overlay.set_child(Some(&root_box));
 
     present_window(app, &state);
+}
+
+/// Builds the bottom bar: the status message, and the broken-link count that
+/// sits at its right until there is nothing broken to report.
+fn build_status_bar() -> (gtk::Box, Label, gtk::Button) {
+    let status = Label::builder()
+        .halign(gtk::Align::Start)
+        .margin_start(8)
+        .margin_end(8)
+        .margin_top(2)
+        .margin_bottom(2)
+        .build();
+
+    let broken = gtk::Button::builder()
+        .has_frame(false)
+        .halign(gtk::Align::End)
+        .hexpand(true)
+        .visible(false)
+        .tooltip_text("Show broken links")
+        .build();
+    broken.add_css_class("status-broken");
+
+    let bar = gtk::Box::new(Orientation::Horizontal, 0);
+    bar.append(&status);
+    bar.append(&broken);
+    (bar, status, broken)
 }
 
 /// Builds the window around the already-assembled layout and shows it.
@@ -805,6 +833,7 @@ fn refresh_links(state: &Rc<State>) {
     // A note appearing or vanishing flips whether open links are broken.
     refresh_editor_links(state);
     refresh_backlinks(state);
+    refresh_broken(state);
 }
 
 /// Refreshes the status bar note count from the index after a structural change,
@@ -998,7 +1027,126 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_completion(state);
     wire_search(app, state);
     wire_tags(app, state);
+    wire_report(app, state);
     wire_editor_escape(state);
+}
+
+/// Install the broken-link report: its action, its status-bar count, and the
+/// back steps out of it.
+fn wire_report(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("broken-links", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| show_report(&open_state));
+    app.add_action(&action);
+
+    let clicked = Rc::clone(state);
+    state.broken.connect_clicked(move |_| show_report(&clicked));
+
+    let escaping = Rc::clone(state);
+    state.report_panel.connect_escape(move || report_back(&escaping));
+    let going_back = Rc::clone(state);
+    state.report_panel.connect_back(move || report_back(&going_back));
+}
+
+/// Steps the report back one level, leaving the sidebar when already at the top.
+fn report_back(state: &Rc<State>) {
+    if matches!(state.report_panel.view(), drill::View::Notes(_)) {
+        show_report(state);
+        return;
+    }
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Reveals the broken-link report, or closes it when it is already showing.
+fn show_report(state: &Rc<State>) {
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_REPORT);
+    if showing
+        && state.report_panel.has_focus()
+        && matches!(state.report_panel.view(), drill::View::Top)
+    {
+        state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+        state.editor.grab_focus();
+        return;
+    }
+
+    let Some(missing) = broken_targets(state) else {
+        return;
+    };
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_REPORT);
+    state.report_panel.show_top(&missing);
+    state.report_panel.focus_list();
+}
+
+/// Every missing link target with how many notes point at it, or `None` outside
+/// a vault.
+fn broken_targets(state: &Rc<State>) -> Option<Vec<(String, i64)>> {
+    let session = state.session.borrow();
+    let session = session.as_ref()?;
+    Some(session.index.broken_links().unwrap_or_default())
+}
+
+/// Updates the status-bar count, which stays hidden while nothing is broken.
+///
+/// Also refreshes the report when it is the page on screen, so fixing a link
+/// while it is open does not leave a stale list behind.
+fn refresh_broken(state: &Rc<State>) {
+    let Some(missing) = broken_targets(state) else {
+        state.broken.set_visible(false);
+        return;
+    };
+    state.broken.set_label(&broken_label(missing.len()));
+    state.broken.set_visible(!missing.is_empty());
+
+    if state.sidebar_stack.visible_child_name().as_deref() != Some(PAGE_REPORT) {
+        return;
+    }
+    // A target that is no longer broken has no page left to show, so the report
+    // steps back to the list rather than sitting on an empty one. The lists keep
+    // their own selection and focus across the redraw.
+    match state.report_panel.view() {
+        drill::View::Notes(target) if missing.iter().any(|(name, _)| *name == target) => {
+            show_broken_linkers(state, &target);
+        }
+        _ => state.report_panel.show_top(&missing),
+    }
+}
+
+/// The status-bar text for `count` missing targets.
+fn broken_label(count: usize) -> String {
+    match count {
+        1 => "1 broken link".to_string(),
+        many => format!("{many} broken links"),
+    }
+}
+
+/// Shows the notes pointing at `missing`, with the lines the dead links sit on.
+fn show_broken_linkers(state: &Rc<State>, missing: &str) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    // A target in the report resolves nowhere, so a link matches it by its
+    // written form alone.
+    let written = |target: &str| Some(target.to_string());
+    let hits: Vec<results::Hit> = session
+        .index
+        .broken_link_notes(missing)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|note| {
+            let text = session.vault.read_note(Path::new(&note.path)).ok()?;
+            let snippets =
+                backlinks::linking_lines(&text, missing, &written, MAX_BACKLINK_LINES);
+            (!snippets.is_empty()).then_some(results::Hit {
+                path: note.path,
+                snippets,
+            })
+        })
+        .collect();
+    state.report_panel.show_notes(missing, &hits);
 }
 
 /// Install Ctrl+Shift+T, and the tag page behavior behind it.
@@ -1018,7 +1166,7 @@ fn wire_tags(app: &Application, state: &Rc<State>) {
 
 /// Steps the tag page back one level, leaving the sidebar when already at the top.
 fn tags_back(state: &Rc<State>) {
-    if matches!(state.tags_panel.view(), tags_panel::View::Notes(_)) {
+    if matches!(state.tags_panel.view(), drill::View::Notes(_)) {
         show_tags(state);
         return;
     }
@@ -1041,6 +1189,10 @@ fn wire_editor_escape(state: &Rc<State>) {
                 escaping.tags_panel.focus_list();
                 true
             }
+            Some(PAGE_REPORT) => {
+                escaping.report_panel.focus_list();
+                true
+            }
             Some(PAGE_SEARCH) => {
                 escaping.search_panel.focus();
                 true
@@ -1054,7 +1206,10 @@ fn wire_editor_escape(state: &Rc<State>) {
 fn show_tags(state: &Rc<State>) {
     let showing = state.sidebar_stack.get_visible()
         && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_TAGS);
-    if showing && state.tags_panel.has_focus() && matches!(state.tags_panel.view(), tags_panel::View::Tags) {
+    if showing
+        && state.tags_panel.has_focus()
+        && matches!(state.tags_panel.view(), drill::View::Top)
+    {
         state.sidebar_stack.set_visible_child_name(PAGE_TREE);
         state.editor.grab_focus();
         return;
@@ -1069,7 +1224,8 @@ fn show_tags(state: &Rc<State>) {
     };
     state.sidebar_stack.set_visible(true);
     state.sidebar_stack.set_visible_child_name(PAGE_TAGS);
-    state.tags_panel.show_tags(&counts);
+    state.tags_panel.show_top(&counts);
+    state.tags_panel.focus_list();
 }
 
 /// Shows the notes carrying `tag`, with the lines the tag appears on.
@@ -1099,7 +1255,7 @@ fn show_tagged_notes(state: &Rc<State>, tag: &str) {
 /// The state a search row activates through, filled in once the state exists.
 type LateState = Rc<RefCell<Option<Rc<State>>>>;
 
-/// Builds the two-page sidebar and the cell its rows activate through.
+/// Builds the four-page sidebar and the cell its rows activate through.
 fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
     let opened: LateState = Rc::new(RefCell::new(None));
 
@@ -1112,27 +1268,38 @@ fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
     });
 
     let tag_target = Rc::clone(&opened);
-    let note_target = Rc::clone(&opened);
-    let tags = tags_panel::Panel::new(
+    let tags = drill::Panel::new(
+        drill::Kind::Tags,
         accent,
         move |tag| {
             let state = tag_target.borrow().clone();
             if let Some(state) = state {
                 show_tagged_notes(&state, tag);
+                state.tags_panel.focus_list();
             }
         },
-        move |path, line| {
-            let state = note_target.borrow().clone();
+        open_through(&opened),
+    );
+
+    let broken_target = Rc::clone(&opened);
+    let report = drill::Panel::new(
+        drill::Kind::Broken,
+        accent,
+        move |missing| {
+            let state = broken_target.borrow().clone();
             if let Some(state) = state {
-                open_search_hit(&state, path, line);
+                show_broken_linkers(&state, missing);
+                state.report_panel.focus_list();
             }
         },
+        open_through(&opened),
     );
 
     let stack = Stack::new();
     stack.add_named(tree, Some(PAGE_TREE));
     stack.add_named(&search.widget(), Some(PAGE_SEARCH));
     stack.add_named(&tags.widget(), Some(PAGE_TAGS));
+    stack.add_named(&report.widget(), Some(PAGE_REPORT));
     stack.set_visible_child_name(PAGE_TREE);
     stack.add_css_class("sidebar");
 
@@ -1140,31 +1307,38 @@ fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
         Sidebar {
             search,
             tags,
+            report,
             stack,
         },
         opened,
     )
 }
 
+/// A row callback that opens a note at a line, once the state exists.
+fn open_through(opened: &LateState) -> impl Fn(&str, i32) + 'static {
+    let target = Rc::clone(opened);
+    move |path, line| {
+        let state = target.borrow().clone();
+        if let Some(state) = state {
+            open_search_hit(&state, path, line);
+        }
+    }
+}
+
 /// The sidebar pages, built together and handed to the state.
 struct Sidebar {
     search: Rc<search_panel::Panel>,
-    tags: Rc<tags_panel::Panel>,
+    tags: Rc<drill::Panel>,
+    report: Rc<drill::Panel>,
     stack: Stack,
 }
 
 /// Builds the backlinks strip, opening notes through the state once it exists.
 fn build_backlinks(accent: &str, opened: &LateState) -> Rc<backlinks::Strip> {
-    let target = Rc::clone(opened);
     backlinks::Strip::new(
         accent,
         Config::load().backlinks_expanded,
-        move |path, line| {
-            let state = target.borrow().clone();
-            if let Some(state) = state {
-                open_search_hit(&state, path, line);
-            }
-        },
+        open_through(opened),
     )
 }
 
@@ -1529,6 +1703,7 @@ fn toggle_theme_mode(state: &Rc<State>) {
     state.preview.set_theme(&next);
     state.search_panel.set_accent(&next.chrome.accent);
     state.tags_panel.set_accent(&next.chrome.accent);
+    state.report_panel.set_accent(&next.chrome.accent);
     state.backlinks.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 
@@ -1831,6 +2006,7 @@ fn save_note(state: &Rc<State>) {
             state.status.set_text(&format!("Saved {name}"));
             refresh_titles(state);
             refresh_backlinks(state);
+            refresh_broken(state);
             refresh_window_title(state);
         }
         None => state.status.set_text("Nothing to save"),
@@ -2637,7 +2813,17 @@ fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str
 
 #[cfg(test)]
 mod tests {
-    use super::delete_question;
+    use super::{broken_label, delete_question};
+
+    #[test]
+    fn one_broken_link_reads_singular() {
+        assert_eq!(broken_label(1), "1 broken link");
+    }
+
+    #[test]
+    fn broken_links_are_counted() {
+        assert_eq!(broken_label(4), "4 broken links");
+    }
 
     #[test]
     fn deleting_a_note_names_it() {

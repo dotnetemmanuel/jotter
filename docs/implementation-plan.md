@@ -10,8 +10,8 @@ before touching any v1.5 feature.
 
 ## Status (2026-07-28)
 
-Phases 0 through 3 are complete. Phase 4 is in progress: frontmatter, tags,
-backlinks, and the tag page have landed; the broken-link report is left.
+Phases 0 through 3 are complete. Phase 4 is complete: frontmatter, tags,
+backlinks, the tag page, and the broken-link report.
 Phase 3 was split: wikilinks landed first because they carry the correctness risk
 and are testable without a GUI, and the pickers share a widget with search.
 
@@ -301,9 +301,9 @@ any conflict handling if the file changed on disk under an unsaved buffer.
 
 ---
 
-## Phase 4: backlinks, tags, frontmatter (in progress)
+## Phase 4: backlinks, tags, frontmatter (complete)
 
-Shipped so far, on branch `phase-4-backlinks`:
+Shipped on branch `phase-4-backlinks`:
 - `crates/parser/src/frontmatter.rs` over `gray_matter` (YAML, TOML, JSON) and
   `crates/parser/src/tags.rs` for inline `#tag`, which reuses `dead_ranges` so
   code, headings, and URL fragments are not tags. Both feed `Index::set_tags`.
@@ -311,12 +311,13 @@ Shipped so far, on branch `phase-4-backlinks`:
   results list moved to `results.rs`, shared by search, backlinks, and tags.
 - Tag page (`Ctrl+Shift+T`): tags alphabetically with counts, then the notes
   carrying one. Escape and a back arrow step one level at a time.
+- Broken-link report, sharing that two-level page through `drill.rs`: missing
+  targets with how many notes point at each, then the dead lines themselves.
+  Opened from the palette or from a status-bar count that hides when the vault
+  is clean, and refreshed in place as links break and heal.
 - Off-plan but requested: folder rename and delete with a confirming dialog, a
   window title carrying the open note, and tree selection that survives a
   rebuild (the watcher rebuilds again after any in-app change).
-
-Left: the broken-link report, as a palette command filling a report page and a
-status-bar count that opens it, hidden when zero.
 
 Original tasks:
 - Backlinks panel below the preview: `SELECT src_note_id FROM links WHERE
