@@ -371,7 +371,30 @@ Same fallback for partial clone, sparse checkout, and awkward rebases.
 
 ---
 
-## Phase 6: polish (ongoing, after 0 to 5 daily-drive for two weeks)
+## Phase 6: app shell and settings
+
+Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
+
+- **Keybinding sheet on `Ctrl+K`.** A dialog listing every binding the app has,
+  read from the same table that registers the accelerators so it cannot drift.
+  This takes `Ctrl+K` from insert link, which needs a new home: decide when the
+  phase starts.
+- **Icon rail left of the file tree.** Always visible, notes icon at the top and
+  a cogwheel at the bottom. `Ctrl+B` keeps collapsing only the tree, so the rail
+  stays put and the sidebar stack moves inside it. The rail is a third column in
+  the paned layout, not a page of the sidebar stack.
+- **Settings page behind the cogwheel.** Editor font and rendered-markdown font
+  chosen from the fonts installed on the system (enumerated through pango), a
+  size for each, and a theme picked from the app theme folder. Writes through
+  `Config`, applies live the way `Ctrl+T` already restyles every surface.
+
+Font choice and theme choice both reach into `crates/theming`, which currently
+takes typography from the theme file. Settings must override it per user without
+editing the bundled themes.
+
+---
+
+## Phase 7: polish (ongoing, after 0 to 5 daily-drive for two weeks)
 
 - Keybinding customization via `keys.toml` (all bindings remappable).
 - Recent-vaults picker refinement, per-vault settings overriding global.
@@ -384,7 +407,8 @@ Ctrl+O quick switcher, Ctrl+P command palette, Ctrl+Shift+F full-text search,
 Ctrl+N new note (current folder), Ctrl+Shift+N new note (root), Ctrl+S save,
 Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
 Ctrl+/ toggle line comment,
-Ctrl+K insert link, Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
+Ctrl+K keybinding sheet (phase 6; insert link moves elsewhere),
+Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
 F2 rename, Ctrl+G S stage all, Ctrl+G C commit, Ctrl+G P push, Ctrl+G F pull.
 
 ## Startup sequence (implement in phase 2, complete by phase 5)
