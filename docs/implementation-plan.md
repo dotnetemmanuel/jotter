@@ -387,6 +387,15 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
   size for each, and a theme picked from the app theme folder. Writes through
   `Config`, applies live the way `Ctrl+T` already restyles every surface.
 
+- **Drag and drop in the tree.** Move a note into a folder by dragging it, the
+  one vault operation with no path today: `Vault::rename_note` already moves
+  across folders and creates parent directories, but the tree UI joins the typed
+  name onto the note's existing parent, so a rename cannot leave its folder.
+  Needs drop targets on folder rows and on the root, a moved-note reindex (the
+  rename path already does this), and a decision on links: bare `[[stem]]` links
+  survive a move by design, path-form `[[notes/plan]]` links do not, so either
+  rewrite them on move or let the broken-link report catch them.
+
 Font choice and theme choice both reach into `crates/theming`, which currently
 takes typography from the theme file. Settings must override it per user without
 editing the bundled themes.
