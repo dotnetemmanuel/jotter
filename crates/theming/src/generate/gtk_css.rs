@@ -80,6 +80,11 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
 .rail-button:checked {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .rail-button:checked label {{\n  border-bottom-color: {accent};\n}}\n\n\
 .rail-settings {{\n  padding-left: 3px;\n  padding-right: 6px;\n}}\n\n\
+.font-tick {{\n  color: {accent};\n}}\n\n\
+.font-list {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
+.font-list > row {{\n  padding: 2px 8px;\n  border-radius: {r}px;\n}}\n\n\
+.font-list > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.font-list > row:selected {{\n  background-color: {overlay};\n  color: {text};\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
 .settings {{\n  background-color: {bg};\n}}\n\n\
 .settings-label {{\n  color: {muted};\n}}\n\n\
 .settings-close {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {text};\n  padding: 4px 8px;\n  min-height: 0;\n  min-width: 0;\n}}\n\n\
@@ -100,6 +105,10 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
 .conflict-body.conflict-resolution, .conflict-body.conflict-resolution text {{\n  background-color: {surface};\n  color: {text};\n}}\n\n\
 .conflict-actions {{\n  padding-top: 4px;\n}}\n\n\
 .conflict-action {{\n  padding: 4px 10px;\n}}\n\n\
+.status-size {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
+.status-size:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
+.size-step {{\n  padding: 2px 10px;\n  min-width: 0;\n}}\n\n\
+.size-value {{\n  font-family: {editor_font};\n}}\n\n\
 .status-git {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-family: {editor_font};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
 .status-git:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .status-broken {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {danger};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\

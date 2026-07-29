@@ -50,15 +50,12 @@ pub struct Appearance {
     /// Font family for the editor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor_font: Option<String>,
-    /// Font size for the editor, in pixels.
+    /// Font size in pixels, shared by the editor and the rendered preview.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub editor_size: Option<u32>,
+    pub font_size: Option<u32>,
     /// Font family for the rendered preview.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_font: Option<String>,
-    /// Font size for the rendered preview, in pixels.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preview_size: Option<u32>,
 }
 
 impl Config {

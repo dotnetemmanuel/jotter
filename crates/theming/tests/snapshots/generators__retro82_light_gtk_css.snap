@@ -227,6 +227,30 @@ popover > contents {
   padding-right: 6px;
 }
 
+.font-tick {
+  color: #d9762b;
+}
+
+.font-list {
+  background-color: transparent;
+  color: #24404f;
+}
+
+.font-list > row {
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.font-list > row:hover {
+  background-color: #d8c49a;
+}
+
+.font-list > row:selected {
+  background-color: #d8c49a;
+  color: #24404f;
+  box-shadow: inset 2px 0 0 0 #d9762b;
+}
+
 .settings {
   background-color: #f6e8cd;
 }
@@ -324,6 +348,30 @@ popover > contents {
 
 .conflict-action {
   padding: 4px 10px;
+}
+
+.status-size {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #5f7d84;
+  font-size: 14px;
+  padding: 0 8px;
+  min-height: 0;
+}
+
+.status-size:hover {
+  background: none;
+  color: #d9762b;
+}
+
+.size-step {
+  padding: 2px 10px;
+  min-width: 0;
+}
+
+.size-value {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
 }
 
 .status-git {

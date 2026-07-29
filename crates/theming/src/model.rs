@@ -201,7 +201,7 @@ pub struct Typography {
     pub preview_font: String,
     /// Monospace font family stack.
     pub mono_font: String,
-    /// Base font size in pixels.
+    /// Base font size in pixels, shared by the editor and the preview.
     pub font_size: u32,
     /// Body line height multiplier.
     pub line_height: f32,

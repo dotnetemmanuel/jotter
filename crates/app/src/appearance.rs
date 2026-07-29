@@ -20,7 +20,7 @@ pub fn apply(theme: &mut Theme, appearance: &Appearance) {
     if let Some(font) = font_of(appearance.preview_font.as_deref()) {
         theme.typography.preview_font = font;
     }
-    if let Some(size) = size_of(appearance.editor_size) {
+    if let Some(size) = size_of(appearance.font_size) {
         theme.typography.font_size = size;
     }
 }
@@ -34,6 +34,31 @@ fn font_of(name: Option<&str>) -> Option<String> {
 /// A size worth applying, clamped to what the window can offer.
 fn size_of(size: Option<u32>) -> Option<u32> {
     Some(size?.clamp(MIN_SIZE, MAX_SIZE))
+}
+
+/// How many size steps a scroll gesture has earned, keeping the remainder.
+///
+/// A wheel notch reports about 1.0, but a touchpad reports a stream of small
+/// deltas, so stepping on every event makes Ctrl+scroll wildly sensitive.
+/// Accumulating means one step per notch either way. A change of direction
+/// drops the remainder, so a nudge back does not fire immediately.
+#[must_use]
+pub fn scroll_steps(carried: f64, delta: f64) -> (i32, f64) {
+    let total = if carried.signum() == delta.signum() {
+        carried + delta
+    } else {
+        delta
+    };
+    let steps = total.trunc();
+    #[allow(clippy::cast_possible_truncation)]
+    (steps as i32, total - steps)
+}
+
+/// One step up or down from `size`, staying inside the range.
+#[must_use]
+pub fn step(size: u32, up: bool) -> u32 {
+    let next = if up { size + 1 } else { size.saturating_sub(1) };
+    next.clamp(MIN_SIZE, MAX_SIZE)
 }
 
 /// The mode the config asks for, defaulting to the theme's own default.
@@ -119,7 +144,7 @@ mod tests {
         apply(
             &mut applied,
             &Appearance {
-                editor_size: Some(500),
+                font_size: Some(500),
                 ..Appearance::default()
             },
         );
@@ -129,11 +154,61 @@ mod tests {
         apply(
             &mut tiny,
             &Appearance {
-                editor_size: Some(1),
+                font_size: Some(1),
                 ..Appearance::default()
             },
         );
         assert_eq!(tiny.typography.font_size, MIN_SIZE);
+    }
+
+    #[test]
+    fn one_size_serves_the_editor_and_the_preview() {
+        let mut applied = theme();
+        apply(
+            &mut applied,
+            &Appearance {
+                font_size: Some(17),
+                ..Appearance::default()
+            },
+        );
+        // The preview CSS reads the same field, so they cannot drift apart.
+        assert_eq!(applied.typography.font_size, 17);
+    }
+
+    #[test]
+    fn a_wheel_notch_is_one_step() {
+        assert_eq!(super::scroll_steps(0.0, 1.0), (1, 0.0));
+        assert_eq!(super::scroll_steps(0.0, -1.0), (-1, 0.0));
+    }
+
+    #[test]
+    fn touchpad_dribble_adds_up_to_one_step() {
+        let (steps, carried) = super::scroll_steps(0.0, 0.3);
+        assert_eq!(steps, 0);
+        let (steps, carried) = super::scroll_steps(carried, 0.3);
+        assert_eq!(steps, 0);
+        let (steps, _) = super::scroll_steps(carried, 0.5);
+        assert_eq!(steps, 1, "three nudges of a third should be one step");
+    }
+
+    #[test]
+    fn turning_around_drops_what_was_carried() {
+        let (_, carried) = super::scroll_steps(0.0, 0.9);
+        let (steps, _) = super::scroll_steps(carried, -0.2);
+        assert_eq!(steps, 0, "a nudge back should not fire a step");
+    }
+
+    #[test]
+    fn a_hard_flick_can_earn_several_steps() {
+        assert_eq!(super::scroll_steps(0.0, 3.0), (3, 0.0));
+    }
+
+    #[test]
+    fn stepping_stops_at_the_ends_of_the_range() {
+        assert_eq!(super::step(14, true), 15);
+        assert_eq!(super::step(14, false), 13);
+        assert_eq!(super::step(MAX_SIZE, true), MAX_SIZE);
+        assert_eq!(super::step(MIN_SIZE, false), MIN_SIZE);
     }
 
     #[test]

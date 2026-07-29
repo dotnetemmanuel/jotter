@@ -11,6 +11,7 @@ mod conflict_model;
 mod conflict_view;
 mod config;
 mod drill;
+mod fonts;
 mod git_panel;
 mod git_status;
 mod links;
@@ -165,6 +166,9 @@ struct State {
     broken: gtk::Button,
     /// The git segment at the far right, hidden for a vault with no repository.
     git: gtk::Button,
+    /// The font size, shown only while it differs from the theme's own, and
+    /// clickable to put it back.
+    size: gtk::Button,
     /// The active vault session, absent in single-file mode.
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
@@ -289,22 +293,8 @@ fn install_chrome_css(theme: &Theme) -> CssProvider {
 /// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
 fn build_ui(app: &Application, path_arg: Option<&str>) {
     let config = Config::load();
-    let wanted = config.appearance.theme.clone().unwrap_or_else(|| {
-        jotter_theming::bundled::DEFAULT_ID.to_string()
-    });
-    let theme_file = match themes::load(&wanted) {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("jotter: could not load theme {wanted}: {err}");
-            return;
-        }
-    };
-    let theme = match appearance::resolve(&theme_file, &config.appearance) {
-        Ok(theme) => theme,
-        Err(err) => {
-            eprintln!("jotter: could not resolve theme {wanted}: {err}");
-            return;
-        }
+    let Some((theme_file, theme)) = startup_theme(&config) else {
+        return;
     };
 
     let chrome_provider = install_chrome_css(&theme);
@@ -328,7 +318,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .build();
     // The stack carries `.sidebar`, so styling it here would draw a second border.
 
-    let (status_bar, status, broken, git) = build_status_bar();
+    let (status_bar, status, broken, git, size) = build_status_bar();
 
     let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
@@ -355,6 +345,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         status: status.clone(),
         broken,
         git: git.clone(),
+        size: size.clone(),
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
@@ -412,7 +403,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
 /// Builds the bottom bar: the status message, and the broken-link count that
 /// sits at its right until there is nothing broken to report.
-fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
+fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button, gtk::Button) {
     let status = Label::builder()
         .halign(gtk::Align::Start)
         .margin_start(8)
@@ -436,6 +427,14 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
         .build();
     git.add_css_class("status-git");
 
+    let size = gtk::Button::builder()
+        .has_frame(false)
+        .halign(gtk::Align::End)
+        .visible(false)
+        .tooltip_text("Back to the theme's size")
+        .build();
+    size.add_css_class("status-size");
+
     // An explicit spacer, because the right-hand widgets come and go and a
     // hidden one cannot hold the gap open.
     let spacer = gtk::Box::new(Orientation::Horizontal, 0);
@@ -444,9 +443,35 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
     let bar = gtk::Box::new(Orientation::Horizontal, 0);
     bar.append(&status);
     bar.append(&spacer);
+    bar.append(&size);
     bar.append(&git);
     bar.append(&broken);
-    (bar, status, broken, git)
+    (bar, status, broken, git, size)
+}
+
+/// The theme jotter starts in: whatever the config asks for, with the user's
+/// appearance on top. `None` when even the fallback will not resolve, which is
+/// a broken build rather than a broken config.
+fn startup_theme(config: &Config) -> Option<(ThemeFile, Theme)> {
+    let wanted = config
+        .appearance
+        .theme
+        .clone()
+        .unwrap_or_else(|| jotter_theming::bundled::DEFAULT_ID.to_string());
+    let file = match themes::load(&wanted) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("jotter: could not load theme {wanted}: {err}");
+            return None;
+        }
+    };
+    match appearance::resolve(&file, &config.appearance) {
+        Ok(theme) => Some((file, theme)),
+        Err(err) => {
+            eprintln!("jotter: could not resolve theme {wanted}: {err}");
+            None
+        }
+    }
 }
 
 /// Lays the window out: rail, then the paned area, with the status bar under
@@ -1393,7 +1418,96 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_report(app, state);
     wire_git(app, state);
     wire_settings(app, state);
+    wire_font_size(app, state);
     wire_editor_escape(state);
+}
+
+/// Install the font size shortcuts: Ctrl and plus or minus, and Ctrl+scroll.
+///
+/// One size serves the editor and the preview, so a note reads the same either
+/// way and stepping it never puts the two panes out of step.
+fn wire_font_size(app: &Application, state: &Rc<State>) {
+    for (name, up, accels) in [
+        ("font-bigger", true, ["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"]),
+        (
+            "font-smaller",
+            false,
+            ["<Primary>minus", "<Primary>underscore", "<Primary>KP_Subtract"],
+        ),
+    ] {
+        let action = gio::SimpleAction::new(name, None);
+        let stepping = Rc::clone(state);
+        action.connect_activate(move |_, _| step_font_size(&stepping, up));
+        app.add_action(&action);
+        app.set_accels_for_action(&format!("app.{name}"), &accels);
+    }
+
+    // Ctrl with the wheel, over the editor or the preview alike, so the pane
+    // under the pointer never has to be the one that owns the shortcut.
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let scrolling = Rc::clone(state);
+    let carried = Cell::new(0.0);
+    scroll.connect_scroll(move |controller, _, delta| {
+        if !controller
+            .current_event_state()
+            .contains(gdk::ModifierType::CONTROL_MASK)
+        {
+            return gtk::glib::Propagation::Proceed;
+        }
+        let (steps, remainder) = appearance::scroll_steps(carried.get(), delta);
+        carried.set(remainder);
+        for _ in 0..steps.abs() {
+            step_font_size(&scrolling, steps < 0);
+        }
+        gtk::glib::Propagation::Stop
+    });
+    state.overlay.add_controller(scroll);
+}
+
+/// Shows the size in the status bar while it differs from the theme's own, so
+/// there is always a way back from a stray Ctrl+scroll.
+fn refresh_size_indicator(state: &Rc<State>) {
+    let chosen = state.config.borrow().appearance.font_size;
+    let Some(chosen) = chosen else {
+        state.size.set_visible(false);
+        return;
+    };
+    let theme_size = state
+        .theme_file
+        .borrow()
+        .resolve(state.theme.borrow().mode)
+        .map(|bare| bare.typography.font_size);
+    if theme_size.is_ok_and(|size| size == chosen) {
+        state.size.set_visible(false);
+        return;
+    }
+    state.size.set_label(&format!("{chosen}px \u{21ba}"));
+    state.size.set_visible(true);
+}
+
+/// Puts the font size back to whatever the theme asks for.
+fn reset_font_size(state: &Rc<State>) {
+    set_appearance(state, |look| look.font_size = None);
+    let now = state.theme.borrow().typography.font_size;
+    say(state, &format!("Font size back to {now}"));
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_size(now);
+    }
+}
+
+/// Nudges the shared font size one point, and remembers it.
+fn step_font_size(state: &Rc<State>, up: bool) {
+    let now = state.theme.borrow().typography.font_size;
+    let next = appearance::step(now, up);
+    if next == now {
+        return;
+    }
+    set_appearance(state, |look| look.font_size = Some(next));
+    say(state, &format!("Font size {next}"));
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_size(next);
+    }
 }
 
 /// Install the settings action, which the rail cogwheel also triggers.
@@ -1403,6 +1517,16 @@ fn wire_settings(app: &Application, state: &Rc<State>) {
     action.connect_activate(move |_, _| open_settings(&opening));
     app.add_action(&action);
     app.set_accels_for_action("app.settings", &["<Primary>comma"]);
+
+    let reset = gio::SimpleAction::new("font-reset", None);
+    let resetting = Rc::clone(state);
+    reset.connect_activate(move |_, _| reset_font_size(&resetting));
+    app.add_action(&reset);
+    app.set_accels_for_action("app.font-reset", &["<Primary>0"]);
+
+    let clicked = Rc::clone(state);
+    state.size.connect_clicked(move |_| reset_font_size(&clicked));
+    refresh_size_indicator(state);
 }
 
 /// Install the git actions and the status-bar segment behind them.
@@ -1830,13 +1954,45 @@ fn open_settings(state: &Rc<State>) {
         .into_iter()
         .map(|entry| entry.id)
         .collect();
-    let current = state.theme_file.borrow().id.clone();
-    let mode = state.theme.borrow().mode;
+    // The theme's own fonts, resolved without the user's overrides on top, so
+    // the window can offer a way back to them.
+    let bare = state
+        .theme_file
+        .borrow()
+        .resolve(state.theme.borrow().mode)
+        .ok();
+    let current = {
+        let theme = state.theme.borrow();
+        let look = &state.config.borrow().appearance;
+        let typography = bare.as_ref().map_or(&theme.typography, |bare| &bare.typography);
+        settings::Current {
+            theme: state.theme_file.borrow().id.clone(),
+            mode: theme.mode,
+            editor_font: settings::Font {
+                theme: typography.editor_font.clone(),
+                chosen: look.editor_font.clone(),
+            },
+            preview_font: settings::Font {
+                theme: typography.preview_font.clone(),
+                chosen: look.preview_font.clone(),
+            },
+            size: theme.typography.font_size,
+        }
+    };
 
     let changing = Rc::clone(state);
-    let handle = settings::open(&parent, &ids, &current, mode, move |change| match change {
+    let handle = settings::open(&parent, &ids, &current, move |change| match change {
         settings::Change::Theme(id) => set_theme(&changing, &id),
         settings::Change::Mode(mode) => set_theme_mode(&changing, mode),
+        settings::Change::EditorFont(name) => {
+            set_appearance(&changing, |look| look.editor_font.clone_from(&name));
+        }
+        settings::Change::Size(size) => {
+            set_appearance(&changing, |look| look.font_size = Some(size));
+        }
+        settings::Change::PreviewFont(name) => {
+            set_appearance(&changing, |look| look.preview_font.clone_from(&name));
+        }
     });
     let window = handle.window.clone();
 
@@ -2477,6 +2633,27 @@ fn set_theme(state: &Rc<State>, id: &str) {
     };
     *state.theme_file.borrow_mut() = file;
     apply_theme(state, next);
+}
+
+/// Records an appearance change, saves it, and repaints with it.
+fn set_appearance<F: Fn(&mut config::Appearance)>(state: &Rc<State>, change: F) {
+    {
+        let mut config = state.config.borrow_mut();
+        change(&mut config.appearance);
+        config.save();
+    }
+    let next = {
+        let file = state.theme_file.borrow();
+        match appearance::resolve(&file, &state.config.borrow().appearance) {
+            Ok(theme) => theme,
+            Err(err) => {
+                eprintln!("jotter: could not apply appearance: {err}");
+                return;
+            }
+        }
+    };
+    apply_theme(state, next);
+    refresh_size_indicator(state);
 }
 
 /// Repaints every surface for `next` and keeps it as the active theme.

@@ -19,6 +19,34 @@ pub enum Change {
     Theme(String),
     /// Switch to light or dark.
     Mode(Mode),
+    /// Set the editor font family, or clear it back to the theme's own.
+    EditorFont(Option<String>),
+    /// Set the font size, which the editor and the preview share.
+    Size(u32),
+    /// Set the preview's font family, or clear it back to the theme's own.
+    PreviewFont(Option<String>),
+}
+
+/// A font as the window needs to show it.
+pub struct Font {
+    /// What the theme itself asks for, which may be a stack like `Inter, sans-serif`.
+    pub theme: String,
+    /// What the user chose instead, if they chose anything.
+    pub chosen: Option<String>,
+}
+
+/// What the window shows when it opens.
+pub struct Current {
+    /// Theme id.
+    pub theme: String,
+    /// Light or dark.
+    pub mode: Mode,
+    /// Editor font: what the theme asks for, and the user's override if any.
+    pub editor_font: Font,
+    /// Preview font: what the theme asks for, and the user's override if any.
+    pub preview_font: Font,
+    /// Font size, shared by both.
+    pub size: u32,
 }
 
 /// A live settings window, plus the means to keep it honest when the app
@@ -28,6 +56,8 @@ pub struct Handle {
     pub window: gtk::Window,
     /// Reflects the app's current mode back into the controls.
     sync: Rc<dyn Fn(Mode)>,
+    /// Reflects a font size changed from outside, by Ctrl+plus or the wheel.
+    sync_size: Rc<dyn Fn(u32)>,
 }
 
 impl Handle {
@@ -35,24 +65,33 @@ impl Handle {
     pub fn show_mode(&self, mode: Mode) {
         (self.sync)(mode);
     }
+
+    /// Updates the size control without reporting a change back.
+    pub fn show_size(&self, size: u32) {
+        (self.sync_size)(size);
+    }
 }
 
 /// Opens the settings window over `parent`, reporting changes as they happen.
 pub fn open<F: Fn(Change) + 'static>(
     parent: &gtk::Window,
     themes: &[String],
-    current_theme: &str,
-    current_mode: Mode,
+    current: &Current,
     on_change: F,
 ) -> Handle {
+    let current_theme = current.theme.as_str();
+    let current_mode = current.mode;
     let on_change = Rc::new(on_change);
 
+    // Set while the app is reflecting its own state, so a programmatic change
+    // does not echo back as a request to change it again.
+    let quiet = Rc::new(Cell::new(false));
     let mode_now = Rc::new(Cell::new(current_mode));
     let swatches: Rc<RefCell<Vec<gtk::DrawingArea>>> = Rc::new(RefCell::new(Vec::new()));
     let (themes_row, theme_picker) =
         theme_buttons(themes, current_theme, &mode_now, &swatches, &on_change);
 
-    let (modes, light, dark, quiet) = mode_buttons(current_mode, &mode_now, &swatches, &on_change);
+    let (modes, light, dark) = mode_buttons(current_mode, &mode_now, &swatches, &quiet, &on_change);
 
     let grid = gtk::Grid::builder()
         .row_spacing(10)
@@ -78,6 +117,10 @@ pub fn open<F: Fn(Change) + 'static>(
     grid.attach(&row_label("Mode"), 0, 1, 1, 1);
     grid.attach(&modes, 1, 1, 1, 1);
 
+    let size = size_row(&grid, current.size, &on_change);
+
+    attach_font_rows(&grid, current, &on_change);
+
     let window = gtk::Window::builder()
         .title("Settings")
         .transient_for(parent)
@@ -85,7 +128,7 @@ pub fn open<F: Fn(Change) + 'static>(
         // main window cannot take a key while it is up, which is what makes
         // Escape reliable whatever was focused when it opened.
         .modal(true)
-        .default_width(480)
+        .default_width(560)
         .resizable(false)
         .child(&grid)
         .build();
@@ -148,7 +191,16 @@ pub fn open<F: Fn(Change) + 'static>(
         })
     };
 
-    Handle { window, sync }
+    let sync_size: Rc<dyn Fn(u32)> = {
+        let size = size.clone();
+        Rc::new(move |value| size.set_label(&value.to_string()))
+    };
+
+    Handle {
+        window,
+        sync,
+        sync_size,
+    }
 }
 
 /// The light and dark pair, and the flag that keeps a programmatic toggle from
@@ -157,8 +209,9 @@ fn mode_buttons(
     current_mode: Mode,
     mode_now: &Rc<Cell<Mode>>,
     swatches: &Rc<RefCell<Vec<gtk::DrawingArea>>>,
+    quiet: &Rc<Cell<bool>>,
     on_change: &Rc<impl Fn(Change) + 'static>,
-) -> (gtk::Box, gtk::ToggleButton, gtk::ToggleButton, Rc<Cell<bool>>) {
+) -> (gtk::Box, gtk::ToggleButton, gtk::ToggleButton) {
     let light = gtk::ToggleButton::with_label("Light");
     let dark = gtk::ToggleButton::with_label("Dark");
     dark.set_group(Some(&light));
@@ -166,14 +219,10 @@ fn mode_buttons(
         Mode::Light => light.set_active(true),
         Mode::Dark => dark.set_active(true),
     }
-    // Set while the app is reflecting its own state, so a programmatic toggle
-    // does not echo back as a request to change it.
-    let quiet = Rc::new(Cell::new(false));
-
     let switched = Rc::clone(on_change);
     let repaint = Rc::clone(mode_now);
     let areas = Rc::clone(swatches);
-    let hushed = Rc::clone(&quiet);
+    let hushed = Rc::clone(quiet);
     light.connect_toggled(move |button| {
         if button.is_active() && !hushed.get() {
             // The swatches show the mode you are in, so they repaint with it.
@@ -187,7 +236,7 @@ fn mode_buttons(
     let switched = Rc::clone(on_change);
     let repaint = Rc::clone(mode_now);
     let areas = Rc::clone(swatches);
-    let hushed = Rc::clone(&quiet);
+    let hushed = Rc::clone(quiet);
     dark.connect_toggled(move |button| {
         if button.is_active() && !hushed.get() {
             // The swatches show the mode you are in, so they repaint with it.
@@ -202,7 +251,7 @@ fn mode_buttons(
     modes.append(&light);
     modes.append(&dark);
 
-    (modes, light, dark, quiet)
+    (modes, light, dark)
 }
 
 /// How wide and tall one theme swatch is drawn.
@@ -309,6 +358,159 @@ fn theme_buttons(
 
     let focus = current.or(first).unwrap_or_default();
     (row, focus)
+}
+
+/// The size row: minus, the number, plus, since that is the order the hands
+/// expect and a spin button puts both arrows on one side.
+fn size_row(
+    grid: &gtk::Grid,
+    current: u32,
+    on_change: &Rc<impl Fn(Change) + 'static>,
+) -> gtk::Label {
+    let value = Rc::new(Cell::new(current));
+    let shown = gtk::Label::new(Some(&current.to_string()));
+    shown.add_css_class("size-value");
+    shown.set_width_chars(2);
+
+    let row = gtk::Box::new(Orientation::Horizontal, 8);
+    for (label, up) in [("\u{2212}", false), ("+", true)] {
+        let button = gtk::Button::with_label(label);
+        button.add_css_class("size-step");
+        let value = Rc::clone(&value);
+        let stepped = shown.clone();
+        let on_change = Rc::clone(on_change);
+        button.connect_clicked(move |_| {
+            let next = crate::appearance::step(value.get(), up);
+            if next == value.get() {
+                return;
+            }
+            value.set(next);
+            stepped.set_label(&next.to_string());
+            on_change(Change::Size(next));
+        });
+        if up {
+            row.append(&shown);
+        }
+        row.append(&button);
+    }
+    row.append(&gtk::Label::new(Some("shared by the editor and the preview")));
+
+    grid.attach(&row_label("Font size"), 0, 2, 1, 1);
+    grid.attach(&row, 1, 2, 1, 1);
+    shown
+}
+
+/// The two font rows: the editor's, monospaced only, and the preview's.
+fn attach_font_rows(
+    grid: &gtk::Grid,
+    current: &Current,
+    on_change: &Rc<impl Fn(Change) + 'static>,
+) {
+    let picked = Rc::clone(on_change);
+    let editor = font_row(&crate::fonts::families(true), &current.editor_font, move |name| {
+        picked(Change::EditorFont(name));
+    });
+    grid.attach(&row_label("Editor font"), 0, 3, 1, 1);
+    grid.attach(&editor, 1, 3, 1, 1);
+
+    let picked = Rc::clone(on_change);
+    let preview = font_row(&crate::fonts::families(false), &current.preview_font, move |name| {
+        picked(Change::PreviewFont(name));
+    });
+    grid.attach(&row_label("Preview font"), 0, 4, 1, 1);
+    grid.attach(&preview, 1, 4, 1, 1);
+}
+
+/// A font row: a filter box over the families installed, and a size beside it.
+///
+/// A list rather than a dropdown for the same reason the themes are buttons: a
+/// popover grabs the keyboard, so Escape closes the list instead of the window.
+fn font_row<P: Fn(Option<String>) + 'static>(
+    families: &[String],
+    current: &Font,
+    on_pick: P,
+) -> gtk::Box {
+    let filter = gtk::SearchEntry::builder()
+        .placeholder_text("Filter fonts")
+        .build();
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    list.add_css_class("font-list");
+    let scroller = gtk::ScrolledWindow::builder()
+        .min_content_height(120)
+        .max_content_height(120)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&list)
+        .build();
+
+    let shown = Rc::new(RefCell::new(Vec::<Option<String>>::new()));
+    let fill = {
+        let list = list.clone();
+        let shown = Rc::clone(&shown);
+        let all = families.to_vec();
+        let chosen = current.chosen.clone();
+        let theme_font = current.theme.clone();
+        move |query: &str| {
+            while let Some(child) = list.first_child() {
+                list.remove(&child);
+            }
+            // The theme's own font is always the first entry, so there is a way
+            // back from any choice; the chosen font, if any, is pinned under it.
+            // Both stay put while you filter.
+            let mut names: Vec<Option<String>> = vec![None];
+            if let Some(chosen) = chosen.clone() {
+                names.push(Some(chosen));
+            }
+            let pinned = chosen.clone();
+            names.extend(
+                crate::fonts::matching(&all, query)
+                    .into_iter()
+                    .filter(|name| pinned.as_deref() != Some(name.as_str()))
+                    .map(Some),
+            );
+
+            let active = usize::from(chosen.is_some());
+            for (index, name) in names.iter().enumerate() {
+                let row = gtk::Box::new(Orientation::Horizontal, 6);
+                let tick = gtk::Label::new(Some(if index == active { "\u{2713}" } else { " " }));
+                tick.add_css_class("font-tick");
+                row.append(&tick);
+                let text = match name {
+                    Some(name) => name.clone(),
+                    None => format!("Theme default ({theme_font})"),
+                };
+                row.append(&gtk::Label::builder().xalign(0.0).label(text).build());
+                list.append(&row);
+            }
+            if let Some(row) = list.row_at_index(i32::try_from(active).unwrap_or(0)) {
+                list.select_row(Some(&row));
+            }
+            *shown.borrow_mut() = names;
+        }
+    };
+    fill("");
+    let fill = Rc::new(fill);
+
+    let typing = Rc::clone(&fill);
+    filter.connect_search_changed(move |entry| typing(entry.text().as_str()));
+
+    let picking = Rc::clone(&shown);
+    list.connect_row_selected(move |_, row| {
+        let Some(row) = row else {
+            return;
+        };
+        let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
+        if let Some(name) = picking.borrow().get(index) {
+            on_pick(name.clone());
+        }
+    });
+
+    filter.set_hexpand(true);
+    let row = gtk::Box::new(Orientation::Vertical, 6);
+    row.append(&filter);
+    row.append(&scroller);
+    row
 }
 
 /// A left-hand label for one row.

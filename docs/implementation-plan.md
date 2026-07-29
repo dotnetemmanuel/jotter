@@ -460,7 +460,9 @@ Ctrl+O quick switcher, Ctrl+P command palette, Ctrl+Shift+F full-text search,
 Ctrl+N new note (current folder), Ctrl+Shift+N new note (root), Ctrl+S save,
 Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
 Ctrl+/ toggle line comment,
-Ctrl+H keybinding sheet (phase 6), Ctrl+K insert link,
+Ctrl+H keybinding sheet (phase 6), Ctrl+, settings, Ctrl+plus and Ctrl+minus
+font size, Ctrl+0 back to the theme's size, Ctrl+scroll the same,
+Ctrl+K insert link,
 Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,
 F2 rename, Ctrl+Shift+G sync vault (commit all, pull, push as one action;
 the planned Ctrl+G chords went with the separate stage and push actions).

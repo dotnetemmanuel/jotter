@@ -29,6 +29,10 @@ pub struct Preview {
     /// Theme CSS embedded as an author `<style>` in each rendered document;
     /// swapped on a light/dark switch and picked up by the next render.
     css: RefCell<String>,
+    /// `WebKit` zoom, kept so the body size can be divided back out of it: the
+    /// zoom exists to render crisply on a scaled display, not to make the
+    /// preview's text bigger than the editor's.
+    zoom: RefCell<f64>,
     /// Path of the temp file the current render was written to; shared with the
     /// load-finished handler so it can scroll the loaded page to the anchor.
     base_path: Rc<RefCell<Option<PathBuf>>>,
@@ -78,6 +82,7 @@ impl Preview {
         Self {
             view,
             css: RefCell::new(theme.to_preview_css()),
+            zoom: RefCell::new(1.0),
             base_path,
             pending_anchor,
             counter: RefCell::new(0),
@@ -115,6 +120,7 @@ impl Preview {
     /// applied on the next `render`; the caller re-renders if the preview shows.
     pub fn set_theme(&self, theme: &jotter_theming::Theme) {
         *self.css.borrow_mut() = theme.to_preview_css();
+        self.rescale_body();
     }
 
     /// The widget to pack into a container (the `WebView` upcast to `gtk::Widget`).
@@ -173,8 +179,40 @@ impl Preview {
     /// Set the zoom level proportional to the monitor scale factor to avoid blurry
     /// text under Wayland fractional scaling.
     pub fn set_zoom(&self, zoom: f64) {
+        self.zoom.replace(zoom);
         self.view.set_zoom_level(zoom);
+        self.rescale_body();
     }
+
+    /// Appends a body rule that divides the zoom back out of the base size.
+    ///
+    /// The zoom is there so glyphs render crisply on a fractionally scaled
+    /// display; without this the preview's body text would also come out that
+    /// much larger than the editor's, which is the same document at the same
+    /// size and should look it. Headings keep their `em` multiples, so they
+    /// still scale from the body rather than from a fixed number.
+    fn rescale_body(&self) {
+        let zoom = *self.zoom.borrow();
+        if zoom <= 0.0 {
+            return;
+        }
+        let css = self.css.borrow().clone();
+        let Some(base) = base_font_size(&css) else {
+            return;
+        };
+        let corrected = f64::from(base) / zoom;
+        let rule = format!("\nbody {{ font-size: {corrected:.3}px; }}\n");
+        self.css.borrow_mut().push_str(&rule);
+    }
+}
+
+/// The `body` font size the theme's preview CSS asks for, in pixels.
+fn base_font_size(css: &str) -> Option<u32> {
+    let body = css.find("body {")?;
+    let size = css[body..].find("font-size:")? + body + "font-size:".len();
+    let rest = &css[size..];
+    let end = rest.find("px")?;
+    rest[..end].trim().parse().ok()
 }
 
 /// Write the document to `{user_cache_dir}/jotter/preview.html`, returning the
