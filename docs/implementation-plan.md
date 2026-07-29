@@ -426,6 +426,21 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
   path-form targets, and reindexes them. The same machinery serves a rename,
   which today silently breaks every `[[stem]]` link pointing at the old name.
 
+- **Ask before adopting a folder.** Any directory argument is treated as a vault
+  today: `Vault::open` only checks that it is a directory, and jotter then
+  creates `.jotter/`, writes ignore files, and indexes every markdown file under
+  it, with no prompt and no size guard. Point it at a home directory and it walks
+  the lot. A folder with no `.jotter` should ask once ("Open this folder as a
+  jotter vault? It holds N notes") before creating anything, and remember the
+  answer. A folder that already has one opens as it does now.
+
+- **Vault picker.** A list of the vaults jotter already knows (`recent_vaults` in
+  the config, filtered to those still on disk), shown when jotter is started with
+  no argument, with an entry to open another folder. This is the "no arg ->
+  recent-vaults picker" line from the startup sequence, which never got built:
+  today a bare `jotter` silently reopens the most recent vault. Reuses the picker
+  widget the palette and switcher already share.
+
 Font choice and theme choice both reach into `crates/theming`, which currently
 takes typography from the theme file. Settings must override it per user without
 editing the bundled themes.
