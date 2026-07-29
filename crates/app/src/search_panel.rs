@@ -1,35 +1,20 @@
-//! The full-text search panel that takes over the sidebar: a query entry above
-//! a list of matching notes, each with the lines that matched.
+//! The full-text search page: a query entry above the shared results list.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{Orientation, ScrolledWindow, gdk, glib};
 
-use crate::search::Snippet;
-
-/// One matching note and the lines worth showing from it.
-#[derive(Clone)]
-pub struct Hit {
-    /// Vault-relative path of the note.
-    pub path: String,
-    /// Matching lines, already capped by the caller.
-    pub snippets: Vec<Snippet>,
-}
+use crate::results::{Hit, List};
 
 /// The search sidebar page.
 pub struct Panel {
     root: gtk::Box,
+    back: gtk::Button,
     entry: gtk::Entry,
-    list: gtk::ListBox,
     status: gtk::Label,
-    /// Note path and line behind each list row, parallel to the rows.
-    targets: RefCell<Vec<(String, i32)>>,
-    /// Color the matched words take, refreshed on a theme change.
-    accent: RefCell<String>,
-    /// The current results, kept so a theme change can redraw them.
-    hits: RefCell<Vec<Hit>>,
+    results: Rc<List>,
     /// Whether a query is in effect, which decides the status line.
     searching: Cell<bool>,
 }
@@ -39,15 +24,27 @@ impl Panel {
     pub fn new<A: Fn(&str, i32) + 'static>(accent: &str, on_activate: A) -> Rc<Self> {
         let entry = gtk::Entry::builder()
             .placeholder_text("Search notes")
-            .margin_top(8)
-            .margin_bottom(4)
-            .margin_start(8)
-            .margin_end(8)
+            .hexpand(true)
             .build();
 
-        let list = gtk::ListBox::new();
-        list.set_selection_mode(gtk::SelectionMode::Single);
-        list.add_css_class("search-results");
+        // The icon themes here only have chevrons, so the arrow is a Nerd Font
+        // glyph, which is centered on the em box rather than sitting on the baseline.
+        let back = gtk::Button::builder()
+            .label("\u{f060}")
+            .has_frame(false)
+            .valign(gtk::Align::Center)
+            .halign(gtk::Align::Start)
+            .tooltip_text("Back to files")
+            .build();
+        back.add_css_class("panel-back");
+
+        let bar = gtk::Box::new(Orientation::Horizontal, 4);
+        bar.set_margin_start(6);
+        bar.set_margin_end(8);
+        bar.set_margin_top(6);
+        bar.set_margin_bottom(4);
+        bar.append(&back);
+        bar.append(&entry);
 
         let status = gtk::Label::builder()
             .xalign(0.0)
@@ -56,38 +53,26 @@ impl Panel {
             .build();
         status.add_css_class("picker-detail");
 
+        let results = List::new(accent, on_activate);
         let scroller = ScrolledWindow::builder()
             .vexpand(true)
             .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&list)
+            .child(&results.widget())
             .build();
 
         let root = gtk::Box::new(Orientation::Vertical, 0);
-        root.append(&entry);
+        root.append(&bar);
         root.append(&status);
         root.append(&scroller);
 
-        let panel = Rc::new(Self {
+        Rc::new(Self {
             root,
+            back,
             entry,
-            list,
             status,
-            targets: RefCell::new(Vec::new()),
-            accent: RefCell::new(accent.to_string()),
-            hits: RefCell::new(Vec::new()),
+            results,
             searching: Cell::new(false),
-        });
-
-        let activated = Rc::clone(&panel);
-        panel.list.connect_row_activated(move |_, row| {
-            let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
-            let target = activated.targets.borrow().get(index).cloned();
-            if let Some((path, line)) = target {
-                on_activate(&path, line);
-            }
-        });
-
-        panel
+        })
     }
 
     /// The widget to place in the sidebar.
@@ -96,11 +81,9 @@ impl Panel {
         self.root.clone().upcast()
     }
 
-    /// Recolors the matched words after a theme change, redrawing the results.
+    /// Recolors the matched words after a theme change.
     pub fn set_accent(&self, accent: &str) {
-        self.accent.replace(accent.to_string());
-        let hits = self.hits.borrow().clone();
-        self.set_hits(&hits, self.searching.get());
+        self.results.set_accent(accent);
     }
 
     /// Whether focus is anywhere in the panel, entry or results.
@@ -122,7 +105,13 @@ impl Panel {
 
     /// Runs `f` on every change to the query text.
     pub fn connect_query<F: Fn(&str) + 'static>(&self, f: F) {
-        self.entry.connect_changed(move |entry| f(entry.text().as_str()));
+        self.entry
+            .connect_changed(move |entry| f(entry.text().as_str()));
+    }
+
+    /// Runs `f` when the back arrow is clicked.
+    pub fn connect_back<F: Fn() + 'static>(&self, f: F) {
+        self.back.connect_clicked(move |_| f());
     }
 
     /// Runs `f` when Escape is pressed in the query entry.
@@ -140,91 +129,18 @@ impl Panel {
 
     /// Replaces the results with `hits`, or shows why there are none.
     pub fn set_hits(&self, hits: &[Hit], searching: bool) {
-        while let Some(child) = self.list.first_child() {
-            self.list.remove(&child);
-        }
-        let mut targets = Vec::new();
-
-        for hit in hits {
-            self.list.append(&heading_row(&hit.path, hit.snippets.len()));
-            targets.push((hit.path.clone(), 0));
-            for snippet in &hit.snippets {
-                self.list.append(&snippet_row(snippet, &self.accent.borrow()));
-                targets.push((hit.path.clone(), snippet.line));
-            }
-        }
-
-        self.status.set_text(&status_text(hits, searching));
-        *self.targets.borrow_mut() = targets;
+        self.results.set_hits(hits);
         self.searching.set(searching);
-        *self.hits.borrow_mut() = hits.to_vec();
+        self.status.set_text(&status_text(hits.len(), searching));
     }
-}
-
-/// Folder and bare name of a note path, for the two-tone result heading.
-fn split_path(path: &str) -> (String, String) {
-    let (folder, file) = path.rsplit_once('/').unwrap_or(("", path));
-    let stem = file.strip_suffix(".md").unwrap_or(file);
-    (folder.to_string(), stem.to_string())
-}
-
-/// The note line of a result group.
-fn heading_row(path: &str, matches: usize) -> gtk::Box {
-    let (folder, stem) = split_path(path);
-
-    let row = gtk::Box::new(Orientation::Horizontal, 6);
-    row.add_css_class("search-heading");
-
-    let name = gtk::Label::builder().xalign(0.0).label(&stem).build();
-    name.add_css_class("search-name");
-    row.append(&name);
-
-    if !folder.is_empty() {
-        let where_it_lives = gtk::Label::builder()
-            .xalign(0.0)
-            .ellipsize(gtk::pango::EllipsizeMode::Start)
-            .label(folder)
-            .build();
-        where_it_lives.add_css_class("search-folder");
-        row.append(&where_it_lives);
-    }
-
-    let count = gtk::Label::builder()
-        .xalign(1.0)
-        .hexpand(true)
-        .label(matches.to_string())
-        .build();
-    count.add_css_class("search-count");
-    row.append(&count);
-    row
-}
-
-/// One matching line, with the query terms marked in the accent color.
-fn snippet_row(snippet: &Snippet, accent: &str) -> gtk::Label {
-    let positions = crate::search::highlight_positions(&snippet.text, &snippet.spans);
-    let label = gtk::Label::builder()
-        .xalign(0.0)
-        .wrap(true)
-        .wrap_mode(gtk::pango::WrapMode::WordChar)
-        .lines(2)
-        .ellipsize(gtk::pango::EllipsizeMode::End)
-        .use_markup(true)
-        .label(crate::picker::highlight_colored(
-            &snippet.text,
-            &positions,
-            accent,
-        ))
-        .build();
-    label.add_css_class("search-snippet");
-    label
 }
 
 /// The line under the entry: how many notes matched, or why none did.
-fn status_text(hits: &[Hit], searching: bool) -> String {
+fn status_text(matches: usize, searching: bool) -> String {
     if !searching {
         return String::new();
     }
-    match hits.len() {
+    match matches {
         0 => "No matches".to_string(),
         1 => "1 note".to_string(),
         count => format!("{count} notes"),
@@ -233,56 +149,25 @@ fn status_text(hits: &[Hit], searching: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Hit, split_path, status_text};
-
-    #[test]
-    fn a_nested_note_splits_into_folder_and_name() {
-        assert_eq!(
-            split_path("notes/phase3-plan.md"),
-            ("notes".to_string(), "phase3-plan".to_string())
-        );
-    }
-
-    #[test]
-    fn a_root_note_has_no_folder() {
-        assert_eq!(
-            split_path("plan.md"),
-            (String::new(), "plan".to_string())
-        );
-    }
-
-    #[test]
-    fn a_deep_note_keeps_its_whole_folder_path() {
-        assert_eq!(
-            split_path("a/b/c.md"),
-            ("a/b".to_string(), "c".to_string())
-        );
-    }
-
-    fn hit(path: &str) -> Hit {
-        Hit {
-            path: path.to_string(),
-            snippets: Vec::new(),
-        }
-    }
+    use super::status_text;
 
     #[test]
     fn an_idle_panel_says_nothing() {
-        assert_eq!(status_text(&[], false), "");
+        assert_eq!(status_text(0, false), "");
     }
 
     #[test]
     fn an_empty_result_says_so() {
-        assert_eq!(status_text(&[], true), "No matches");
+        assert_eq!(status_text(0, true), "No matches");
     }
 
     #[test]
     fn one_match_is_singular() {
-        assert_eq!(status_text(&[hit("a.md")], true), "1 note");
+        assert_eq!(status_text(1, true), "1 note");
     }
 
     #[test]
     fn several_matches_are_counted() {
-        assert_eq!(status_text(&[hit("a.md"), hit("b.md")], true), "2 notes");
+        assert_eq!(status_text(2, true), "2 notes");
     }
 }

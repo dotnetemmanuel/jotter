@@ -52,6 +52,19 @@ paned > separator {
   background-color: #134e5a;
 }
 
+.sidebar listview > row:focus-within {
+  box-shadow: inset 2px 0 0 0 #faa968;
+}
+
+.tree-title {
+  color: #6d8f8a;
+  font-size: 14px;
+}
+
+.sidebar listview > row:selected .tree-title {
+  color: alpha(#05182e, 0.7);
+}
+
 .sidebar listview > row:selected {
   background-color: #faa968;
   color: #05182e;
@@ -165,6 +178,40 @@ popover > contents {
   background-color: alpha(#05182e, 0.45);
 }
 
+.status-broken {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #f85525;
+  font-size: 14px;
+  padding: 0 8px;
+  min-height: 0;
+}
+
+.status-broken:hover {
+  background: none;
+  color: #faa968;
+}
+
+.backlinks {
+  background-color: #05182e;
+}
+
+.backlinks-header {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #6d8f8a;
+  font-size: 14px;
+  padding: 3px 10px;
+  min-height: 0;
+}
+
+.backlinks-header:hover {
+  background: none;
+  color: #f6dcac;
+}
+
 .search-results {
   background-color: transparent;
   color: #f6dcac;
@@ -184,6 +231,37 @@ popover > contents {
   background-color: #134e5a;
   color: #f6dcac;
   box-shadow: inset 2px 0 0 0 #faa968;
+}
+
+.panel-back {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #f6dcac;
+  padding: 0 4px;
+  margin: 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panel-back label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 16px;
+  margin-bottom: 3px;
+}
+
+.panel-back:hover {
+  background: none;
+  color: #faa968;
+}
+
+.tags-heading {
+  color: #6d8f8a;
+  font-size: 14px;
+}
+
+.tag-row {
+  padding: 3px 4px;
 }
 
 .search-heading {

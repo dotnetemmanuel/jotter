@@ -27,6 +27,9 @@ paned > separator {{\n  background-color: {overlay};\n  background-image: none;\
 .sidebar listview {{\n  background-color: transparent;\n  color: {text};\n  padding-top: 6px;\n}}\n\n\
 .sidebar listview > row {{\n  border-radius: {r}px;\n  padding: 3px 8px;\n  margin: 1px 6px;\n}}\n\n\
 .sidebar listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.sidebar listview > row:focus-within {{\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.tree-title {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.sidebar listview > row:selected .tree-title {{\n  color: alpha({bg}, 0.7);\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .sidebar listview > row:selected:hover {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 button {{\n  background-color: {surface};\n  background-image: none;\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n  padding: 6px 14px;\n}}\n\n\
@@ -45,10 +48,20 @@ entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: non
 row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.status-broken {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {danger};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
+.status-broken:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
+.backlinks {{\n  background-color: {bg};\n}}\n\n\
+.backlinks-header {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-size: {small}px;\n  padding: 3px 10px;\n  min-height: 0;\n}}\n\n\
+.backlinks-header:hover {{\n  background: none;\n  color: {text};\n}}\n\n\
 .search-results {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
 .search-results > row {{\n  border-radius: {r}px;\n  padding: 1px 6px;\n  margin: 0 6px;\n}}\n\n\
 .search-results > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .search-results > row:selected {{\n  background-color: {overlay};\n  color: {text};\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.panel-back {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {text};\n  padding: 0 4px;\n  margin: 0;\n  min-height: 0;\n  min-width: 0;\n}}\n\n\
+.panel-back label {{\n  font-family: {editor_font};\n  font-size: {back_size}px;\n  margin-bottom: 3px;\n}}\n\n\
+.panel-back:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
+.tags-heading {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
+.tag-row {{\n  padding: 3px 4px;\n}}\n\n\
 .search-heading {{\n  margin-top: 14px;\n  padding: 2px 2px 4px 2px;\n  border-bottom: 1px solid alpha({border}, 0.25);\n}}\n\n\
 .search-results > row:first-child .search-heading {{\n  margin-top: 2px;\n}}\n\n\
 .search-name {{\n  font-weight: bold;\n}}\n\n\
@@ -77,9 +90,11 @@ tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px s
             danger = c.danger,
             muted = c.muted,
             ui_font = t.ui_font,
+            editor_font = t.editor_font,
             size = t.font_size,
             picker_size = t.font_size + 4,
             small = t.font_size.saturating_sub(1),
+            back_size = t.font_size + 1,
         )
     }
 }

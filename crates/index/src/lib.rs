@@ -76,6 +76,16 @@ pub struct LinkRecord {
 }
 
 impl LinkRecord {
+    /// A link to `target` already known to point at `dst_path`.
+    #[must_use]
+    pub fn resolved(target: impl Into<String>, dst_path: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+            dst_path: dst_path.into(),
+            resolved: true,
+        }
+    }
+
     /// An unresolved link to `target`, for [`Index::reresolve_links`] to settle.
     #[must_use]
     pub fn unresolved(target: impl Into<String>) -> Self {
@@ -371,13 +381,72 @@ impl Index {
         Ok(ids)
     }
 
-    /// Returns each unresolved link target with the count of notes pointing at it.
+    /// Every tag with how many notes carry it, in alphabetical order.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn tag_counts(&self) -> Result<Vec<(String, i64)>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tag, count(*) FROM tags GROUP BY tag ORDER BY tag",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        let mut counts = Vec::new();
+        for row in rows {
+            counts.push(row?);
+        }
+        Ok(counts)
+    }
+
+    /// Notes carrying `tag`, whole and sorted by path.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn tagged_notes(&self, tag: &str) -> Result<Vec<Note>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT n.id, n.path, n.title, n.mtime, n.size, n.frontmatter
+             FROM tags t JOIN notes n ON n.id = t.note_id
+             WHERE t.tag = ?1 ORDER BY n.path",
+        )?;
+        let rows = stmt.query_map(params![tag], Self::map_note)?;
+        let mut notes = Vec::new();
+        for note in rows {
+            notes.push(note?);
+        }
+        Ok(notes)
+    }
+
+    /// Notes whose links resolve to `dst_path`, whole and sorted by path.
+    ///
+    /// The companion to [`Index::backlinks`] for callers that want the notes
+    /// rather than their row ids. A note reaching the target by both stem and
+    /// path is listed once.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn linking_notes(&self, dst_path: &str) -> Result<Vec<Note>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT n.id, n.path, n.title, n.mtime, n.size, n.frontmatter
+             FROM links l JOIN notes n ON n.id = l.src_note_id
+             WHERE l.dst_path = ?1 AND l.resolved = 1
+             ORDER BY n.path",
+        )?;
+        let rows = stmt.query_map(params![dst_path], Self::map_note)?;
+        let mut notes = Vec::new();
+        for note in rows {
+            notes.push(note?);
+        }
+        Ok(notes)
+    }
+
+    /// Returns each unresolved link target with the count of notes pointing at it,
+    /// in alphabetical order.
     ///
     /// # Errors
     /// Returns [`IndexError::Sqlite`] on query failure.
     pub fn broken_links(&self) -> Result<Vec<(String, i64)>, IndexError> {
         let mut stmt = self.conn.prepare(
-            "SELECT dst_path, count(*) FROM links WHERE resolved = 0 GROUP BY dst_path",
+            "SELECT dst_path, count(DISTINCT src_note_id) FROM links
+             WHERE resolved = 0 GROUP BY dst_path ORDER BY dst_path",
         )?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut out = Vec::new();
@@ -385,6 +454,28 @@ impl Index {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Notes holding an unresolved link to `dst_path`, whole and sorted by path.
+    ///
+    /// The companion to [`Index::broken_links`], which names the targets but not
+    /// who points at them. A note pointing twice is listed once.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn broken_link_notes(&self, dst_path: &str) -> Result<Vec<Note>, IndexError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT n.id, n.path, n.title, n.mtime, n.size, n.frontmatter
+             FROM links l JOIN notes n ON n.id = l.src_note_id
+             WHERE l.dst_path = ?1 AND l.resolved = 0
+             ORDER BY n.path",
+        )?;
+        let rows = stmt.query_map(params![dst_path], Self::map_note)?;
+        let mut notes = Vec::new();
+        for note in rows {
+            notes.push(note?);
+        }
+        Ok(notes)
     }
 
     /// Runs an `FTS5` `MATCH` and returns matching note ids (FTS rowids).
@@ -761,6 +852,60 @@ mod tests {
     }
 
     #[test]
+    fn linking_notes_come_back_whole() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index.upsert_note(&note("b.md", "B", "")).unwrap();
+        index.set_links(a, &[LinkRecord::resolved("b", "b.md")]).unwrap();
+        let found = index.linking_notes("b.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, "a.md");
+        assert_eq!(found[0].title, "A");
+    }
+
+    #[test]
+    fn linking_notes_are_sorted_by_path() {
+        let index = Index::open_in_memory().unwrap();
+        index.upsert_note(&note("target.md", "T", "")).unwrap();
+        for name in ["z.md", "a.md"] {
+            let id = index.upsert_note(&note(name, name, "")).unwrap();
+            index.set_links(id, &[LinkRecord::resolved("target", "target.md")]).unwrap();
+        }
+        let paths: Vec<String> = index
+            .linking_notes("target.md")
+            .unwrap()
+            .into_iter()
+            .map(|note| note.path)
+            .collect();
+        assert_eq!(paths, ["a.md", "z.md"]);
+    }
+
+    #[test]
+    fn an_unresolved_link_is_not_a_backlink() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index.set_links(a, &[LinkRecord::unresolved("ghost")]).unwrap();
+        assert!(index.linking_notes("ghost").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_note_reaching_a_target_twice_is_listed_once() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index.upsert_note(&note("sub/b.md", "B", "")).unwrap();
+        index
+            .set_links(
+                a,
+                &[
+                    LinkRecord::resolved("b", "sub/b.md"),
+                    LinkRecord::resolved("sub/b", "sub/b.md"),
+                ],
+            )
+            .unwrap();
+        assert_eq!(index.linking_notes("sub/b.md").unwrap().len(), 1);
+    }
+
+    #[test]
     fn broken_links_groups_with_counts() {
         let index = Index::open_in_memory().unwrap();
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
@@ -777,12 +922,55 @@ mod tests {
                 ],
             )
             .unwrap();
-        let mut broken = index.broken_links().unwrap();
-        broken.sort();
         assert_eq!(
-            broken,
+            index.broken_links().unwrap(),
             vec![("missing.md".to_string(), 2), ("other.md".to_string(), 1)]
         );
+    }
+
+    #[test]
+    fn a_note_pointing_twice_at_a_missing_target_counts_once() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        index
+            .set_links(
+                a,
+                &[
+                    LinkRecord::unresolved("ghost"),
+                    LinkRecord::unresolved("ghost"),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            index.broken_links().unwrap(),
+            vec![("ghost".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn broken_link_notes_names_who_points_at_a_missing_target() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
+        index
+            .set_links(
+                a,
+                &[
+                    LinkRecord::unresolved("ghost"),
+                    LinkRecord::unresolved("ghost"),
+                ],
+            )
+            .unwrap();
+        index
+            .set_links(b, &[LinkRecord::resolved("a", "a.md")])
+            .unwrap();
+
+        let linkers = index.broken_link_notes("ghost").unwrap();
+        assert_eq!(
+            linkers.iter().map(|n| n.path.as_str()).collect::<Vec<_>>(),
+            ["a.md"]
+        );
+        assert!(index.broken_link_notes("a").unwrap().is_empty());
     }
 
     #[test]
@@ -840,6 +1028,52 @@ mod tests {
             .unwrap();
         // Unbalanced quote is invalid FTS5 syntax; expect an empty result, not an error.
         assert!(index.search("\"unterminated").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_counts_are_alphabetical() {
+        let index = Index::open_in_memory().unwrap();
+        let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
+        let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
+        index.set_tags(a, &["project".into(), "demo".into()]).unwrap();
+        index.set_tags(b, &["project".into(), "alpha".into()]).unwrap();
+        assert_eq!(
+            index.tag_counts().unwrap(),
+            [
+                ("alpha".to_string(), 1),
+                ("demo".to_string(), 1),
+                ("project".to_string(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vault_without_tags_counts_nothing() {
+        let index = Index::open_in_memory().unwrap();
+        index.upsert_note(&note("a.md", "A", "")).unwrap();
+        assert!(index.tag_counts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn tagged_notes_come_back_whole_and_sorted() {
+        let index = Index::open_in_memory().unwrap();
+        for name in ["z.md", "a.md"] {
+            let id = index.upsert_note(&note(name, name, "")).unwrap();
+            index.set_tags(id, &["project".into()]).unwrap();
+        }
+        let paths: Vec<String> = index
+            .tagged_notes("project")
+            .unwrap()
+            .into_iter()
+            .map(|note| note.path)
+            .collect();
+        assert_eq!(paths, ["a.md", "z.md"]);
+    }
+
+    #[test]
+    fn an_unknown_tag_has_no_notes() {
+        let index = Index::open_in_memory().unwrap();
+        assert!(index.tagged_notes("nothing").unwrap().is_empty());
     }
 
     #[test]

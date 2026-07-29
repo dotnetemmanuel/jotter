@@ -52,6 +52,19 @@ paned > separator {
   background-color: #2e303e;
 }
 
+.sidebar listview > row:focus-within {
+  box-shadow: inset 2px 0 0 0 #ee64ac;
+}
+
+.tree-title {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.sidebar listview > row:selected .tree-title {
+  color: alpha(#1c1e26, 0.7);
+}
+
 .sidebar listview > row:selected {
   background-color: #ee64ac;
   color: #1c1e26;
@@ -165,6 +178,40 @@ popover > contents {
   background-color: alpha(#1c1e26, 0.45);
 }
 
+.status-broken {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #e95678;
+  font-size: 14px;
+  padding: 0 8px;
+  min-height: 0;
+}
+
+.status-broken:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.backlinks {
+  background-color: #1c1e26;
+}
+
+.backlinks-header {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #6c6f93;
+  font-size: 14px;
+  padding: 3px 10px;
+  min-height: 0;
+}
+
+.backlinks-header:hover {
+  background: none;
+  color: #fadad1;
+}
+
 .search-results {
   background-color: transparent;
   color: #fadad1;
@@ -184,6 +231,37 @@ popover > contents {
   background-color: #2e303e;
   color: #fadad1;
   box-shadow: inset 2px 0 0 0 #ee64ac;
+}
+
+.panel-back {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #fadad1;
+  padding: 0 4px;
+  margin: 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panel-back label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 16px;
+  margin-bottom: 3px;
+}
+
+.panel-back:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.tags-heading {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.tag-row {
+  padding: 3px 4px;
 }
 
 .search-heading {

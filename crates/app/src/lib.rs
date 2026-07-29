@@ -3,11 +3,14 @@
 //! edit-preview toggle loop, and (in vault mode) the file tree, background index,
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
+mod backlinks;
 mod commands;
 mod complete;
 mod config;
+mod drill;
 mod links;
 mod picker;
+mod results;
 mod search;
 mod search_panel;
 mod switcher;
@@ -16,7 +19,7 @@ mod tree;
 mod vault_session;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
@@ -49,9 +52,11 @@ const PAGE_EDIT: &str = "edit";
 /// Stack page name for the preview.
 const PAGE_PREVIEW: &str = "preview";
 
-/// Sidebar page names: the file tree, and the search panel.
+/// Sidebar page names: the file tree, search, tags, and the broken-link report.
 const PAGE_TREE: &str = "tree";
 const PAGE_SEARCH: &str = "search";
+const PAGE_TAGS: &str = "tags";
+const PAGE_REPORT: &str = "report";
 
 /// Debounce before a typed query hits the index, in milliseconds.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
@@ -76,12 +81,15 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 5] = [
+const PALETTE_COMMANDS: [(&str, &str); 8] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
     ("toggle-theme", "Toggle light and dark theme"),
     ("toggle-sidebar", "Toggle sidebar"),
+    ("tags", "Browse tags"),
+    ("search", "Search notes"),
+    ("broken-links", "Show broken links"),
 ];
 
 /// Fallback document shown when no path is given or a read fails.
@@ -103,6 +111,8 @@ struct VaultSession {
     current: RefCell<Option<PathBuf>>,
     /// Wikilink target lookup, rebuilt from the index on structural change.
     resolver: RefCell<Resolver>,
+    /// Note path to display title, so tree rows need no query per bind.
+    titles: RefCell<HashMap<String, String>>,
 }
 
 /// Shared, single-threaded application state cloned into GTK closures.
@@ -124,6 +134,8 @@ struct State {
     sidebar: ScrolledWindow,
     /// The bottom status label (indexing progress, note counts).
     status: Label,
+    /// The broken-link count at the right of the status bar, hidden when zero.
+    broken: gtk::Button,
     /// The active vault session, absent in single-file mode.
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
@@ -134,6 +146,10 @@ struct State {
     dirty: Cell<bool>,
     /// Path open in single-file mode, absent in vault mode and for the sample.
     single_file: RefCell<Option<PathBuf>>,
+    /// Set while the app selects a tree row itself, so it does not open a note.
+    quiet_selection: Cell<bool>,
+    /// Tree row the app wants selected, reapplied after any rebuild.
+    wanted_row: RefCell<Option<PathBuf>>,
     /// Layer the picker panel is added to, above the editor and preview.
     overlay: gtk::Overlay,
     /// The application, for activating an action the command palette chose.
@@ -142,10 +158,16 @@ struct State {
     picker: RefCell<Option<picker::Handle>>,
     /// The `[[` completion popup, parented on the editor view.
     completion: complete::Popup,
+    /// The backlinks strip under the editor and preview.
+    backlinks: Rc<backlinks::Strip>,
     /// Sidebar pages: the file tree, and full-text search.
     sidebar_stack: Stack,
     /// The full-text search page.
     search_panel: Rc<search_panel::Panel>,
+    /// The tag page.
+    tags_panel: Rc<drill::Panel>,
+    /// The broken-link report page.
+    report_panel: Rc<drill::Panel>,
     /// Pending debounced search, replaced on each keystroke.
     search_pending: RefCell<Option<SourceId>>,
 }
@@ -256,15 +278,12 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .build();
     // The stack carries `.sidebar`, so styling it here would draw a second border.
 
-    let status = Label::builder()
-        .halign(gtk::Align::Start)
-        .margin_start(8)
-        .margin_end(8)
-        .margin_top(2)
-        .margin_bottom(2)
-        .build();
+    let (status_bar, status, broken) = build_status_bar();
 
-    let (search_panel, sidebar_stack, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
+    let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
+    let sidebar_stack = pages.stack.clone();
+
+    let backlinks = build_backlinks(&theme.chrome.accent, &opened);
 
     let config = Config::load();
     let startup = resolve_startup(path_arg, &config);
@@ -280,17 +299,23 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         pending: RefCell::new(None),
         sidebar: sidebar.clone(),
         status: status.clone(),
+        broken,
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
         dirty: Cell::new(false),
         single_file: RefCell::new(None),
+        quiet_selection: Cell::new(false),
+        wanted_row: RefCell::new(None),
         overlay: gtk::Overlay::new(),
         app: app.clone(),
         picker: RefCell::new(None),
         completion,
+        backlinks: Rc::clone(&backlinks),
         sidebar_stack: sidebar_stack.clone(),
-        search_panel,
+        search_panel: pages.search,
+        tags_panel: pages.tags,
+        report_panel: pages.report,
         search_pending: RefCell::new(None),
     });
     opened.replace(Some(Rc::clone(&state)));
@@ -303,10 +328,15 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
     wire_actions(app, &state);
 
+    // The strip sits under both editor and preview, so it shows in either mode.
+    let main_area = gtk::Box::new(Orientation::Vertical, 0);
+    main_area.append(&stack);
+    main_area.append(&backlinks.widget());
+
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
         .start_child(&sidebar_stack)
-        .end_child(&stack)
+        .end_child(&main_area)
         .resize_end_child(true)
         .shrink_start_child(false)
         .position(240)
@@ -315,12 +345,41 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     let root_box = gtk::Box::new(Orientation::Vertical, 0);
     root_box.append(&paned);
     root_box.append(&gtk::Separator::new(Orientation::Horizontal));
-    root_box.append(&status);
+    root_box.append(&status_bar);
     paned.set_vexpand(true);
     state.overlay.set_child(Some(&root_box));
 
-    let header = HeaderBar::new();
+    present_window(app, &state);
+}
 
+/// Builds the bottom bar: the status message, and the broken-link count that
+/// sits at its right until there is nothing broken to report.
+fn build_status_bar() -> (gtk::Box, Label, gtk::Button) {
+    let status = Label::builder()
+        .halign(gtk::Align::Start)
+        .margin_start(8)
+        .margin_end(8)
+        .margin_top(2)
+        .margin_bottom(2)
+        .build();
+
+    let broken = gtk::Button::builder()
+        .has_frame(false)
+        .halign(gtk::Align::End)
+        .hexpand(true)
+        .visible(false)
+        .tooltip_text("Show broken links")
+        .build();
+    broken.add_css_class("status-broken");
+
+    let bar = gtk::Box::new(Orientation::Horizontal, 0);
+    bar.append(&status);
+    bar.append(&broken);
+    (bar, status, broken)
+}
+
+/// Builds the window around the already-assembled layout and shows it.
+fn present_window(app: &Application, state: &Rc<State>) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("jotter")
@@ -328,11 +387,13 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .default_height(900)
         .child(&state.overlay)
         .build();
-    window.set_titlebar(Some(&header));
-    wire_preview_zoom(&window, &state);
-    wire_save_on_close(&window, &state);
+    window.set_titlebar(Some(&HeaderBar::new()));
+    wire_preview_zoom(&window, state);
+    wire_save_on_close(&window, state);
     window.present();
 
+    // The note opened before the window existed, so the title is set once it does.
+    refresh_window_title(state);
     state.editor.grab_focus();
 }
 
@@ -389,6 +450,7 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
     };
 
     let tree_model = build_tree(state, root);
+    restore_expanded(&tree_model, &state.config.borrow().expanded_folders_for(root));
 
     state.session.replace(Some(VaultSession {
         vault,
@@ -397,6 +459,7 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         tree_model: RefCell::new(tree_model),
         current: RefCell::new(None),
         resolver: RefCell::new(Resolver::default()),
+        titles: RefCell::new(HashMap::new()),
     }));
 
     // The index persists across runs, so links can resolve before reindexing runs.
@@ -469,8 +532,66 @@ fn load_note(state: &Rc<State>, rel: &Path) {
         let mut config = state.config.borrow_mut();
         config.set_last_active(&root, rel);
         config.push_recent_note(&root, rel);
-        config.save();
     }
+    // Opening a note is the routine moment to write layout too, so a crash or a
+    // kill does not cost more than the folders opened since the last note switch.
+    remember_layout(state);
+    refresh_backlinks(state);
+    refresh_window_title(state);
+}
+
+/// Retitles the window for the open note and whether it has unsaved edits.
+fn refresh_window_title(state: &Rc<State>) {
+    let name = state
+        .session
+        .borrow()
+        .as_ref()
+        .and_then(|session| session.current.borrow().clone())
+        .or_else(|| state.single_file.borrow().clone())
+        .map(|rel| stem_of(&rel));
+    if let Some(window) = state.overlay.root().and_downcast::<gtk::Window>() {
+        window.set_title(Some(&title::window_title(name.as_deref(), state.dirty.get())));
+    }
+}
+
+/// How many linking lines the strip shows per note.
+const MAX_BACKLINK_LINES: usize = 3;
+
+/// Refills the backlinks strip for the note now open.
+fn refresh_backlinks(state: &Rc<State>) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let Some(rel) = session.current.borrow().clone() else {
+        state.backlinks.set_hits(&[]);
+        return;
+    };
+    let target = vault_session::rel_to_key(&rel);
+    let linkers = session.index.linking_notes(&target).unwrap_or_default();
+
+    let resolver = session.resolver.borrow();
+    let resolve = |written: &str| resolver.lookup(written);
+    let hits: Vec<results::Hit> = linkers
+        .into_iter()
+        .filter_map(|note| {
+            let text = session.vault.read_note(Path::new(&note.path)).ok()?;
+            let snippets =
+                backlinks::linking_lines(&text, &target, &resolve, MAX_BACKLINK_LINES);
+            (!snippets.is_empty()).then_some(results::Hit {
+                path: note.path,
+                snippets,
+            })
+        })
+        .collect();
+    state.backlinks.set_hits(&hits);
+}
+
+/// The indexed title of a note, when it says more than the filename does.
+fn note_title(state: &Rc<State>, rel: &str) -> Option<String> {
+    let session = state.session.borrow();
+    let title = session.as_ref()?.titles.borrow().get(rel).cloned()?;
+    (!title.is_empty()).then_some(title)
 }
 
 /// Builds (or rebuilds) the sidebar tree model and installs it on the `ListView`.
@@ -496,12 +617,20 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let label = Label::builder().halign(gtk::Align::Start).build();
+        let line = gtk::Box::new(Orientation::Horizontal, 6);
+        line.append(&Label::builder().halign(gtk::Align::Start).build());
+        let title = Label::builder()
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        title.add_css_class("tree-title");
+        line.append(&title);
         let expander = TreeExpander::new();
-        expander.set_child(Some(&label));
+        expander.set_child(Some(&line));
         item.set_child(Some(&expander));
     });
-    factory.connect_bind(|_, item| {
+    let bind_state = Rc::clone(state);
+    factory.connect_bind(move |_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
@@ -512,11 +641,25 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
             return;
         };
         expander.set_list_row(Some(&row));
-        if let Some(node) = row.item().and_downcast::<gtk::StringObject>()
-            && let Some(label) = expander.child().and_downcast::<Label>()
-        {
-            label.set_text(tree::label_for(&node.string()));
-        }
+        let Some(node) = row.item().and_downcast::<gtk::StringObject>() else {
+            return;
+        };
+        let Some(line) = expander.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let (Some(name), Some(title)) = (
+            line.first_child().and_downcast::<Label>(),
+            line.last_child().and_downcast::<Label>(),
+        ) else {
+            return;
+        };
+        let rel = node.string();
+        let label = tree::label_for(&rel);
+        name.set_text(label);
+        let stem = label.strip_suffix(".md").unwrap_or(label);
+        let shown = note_title(&bind_state, &rel).filter(|found| found != stem);
+        title.set_text(shown.as_deref().unwrap_or_default());
+        title.set_visible(shown.is_some());
     });
 
     let list_view = ListView::new(Some(selection.clone()), Some(factory));
@@ -537,11 +680,17 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
     // Single-selection change also opens a file, so a single click is enough.
     let select_state = Rc::clone(state);
     selection.connect_selection_changed(move |sel, _, _| {
+        // A selection the app made itself is a highlight, not a request to open.
+        if select_state.quiet_selection.get() {
+            return;
+        }
         let Some(row) = sel.selected_item().and_downcast::<TreeListRow>() else {
             return;
         };
         if let Some(node) = row.item().and_downcast::<gtk::StringObject>() {
             let rel = PathBuf::from(node.string().as_str());
+            // Remembered so a rebuild puts the highlight back where the user left it.
+            select_state.wanted_row.replace(Some(rel.clone()));
             if is_file_node(&select_state, &node.string()) {
                 load_note(&select_state, &rel);
             }
@@ -578,6 +727,13 @@ fn is_file_node(state: &Rc<State>, rel: &str) -> bool {
 
 /// Rebuilds the tree model to reflect a structural change (create/rename/delete).
 fn refresh_tree(state: &Rc<State>) {
+    rebuild_tree(state);
+    update_note_count(state);
+    refresh_links(state);
+}
+
+/// Rebuilds the tree rows in place, keeping open folders open.
+fn rebuild_tree(state: &Rc<State>) {
     let (root, expanded) = {
         let session = state.session.borrow();
         let Some(session) = session.as_ref() else {
@@ -592,8 +748,42 @@ fn refresh_tree(state: &Rc<State>) {
     if let Some(session) = state.session.borrow().as_ref() {
         *session.tree_model.borrow_mut() = model;
     }
-    update_note_count(state);
-    refresh_links(state);
+    reselect_wanted(state);
+}
+
+/// Re-reads titles after a reindex, redrawing the tree only when one changed.
+fn refresh_titles(state: &Rc<State>) {
+    let changed = {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        let Ok(notes) = session.index.all_notes() else {
+            return;
+        };
+        let fresh: HashMap<String, String> = notes
+            .into_iter()
+            .map(|note| (note.path, note.title))
+            .collect();
+        let mut titles = session.titles.borrow_mut();
+        let changed = *titles != fresh;
+        if changed {
+            *titles = fresh;
+        }
+        changed
+    };
+    if !changed {
+        return;
+    }
+    rebuild_tree(state);
+    let current = state
+        .session
+        .borrow()
+        .as_ref()
+        .and_then(|session| session.current.borrow().clone());
+    if let Some(rel) = current {
+        select_in_tree(state, &rel);
+    }
 }
 
 /// Re-tag the wikilinks in the editor buffer so they match what the preview links.
@@ -627,6 +817,10 @@ fn refresh_links(state: &Rc<State>) {
         };
         match session.index.all_notes() {
             Ok(notes) => {
+                *session.titles.borrow_mut() = notes
+                    .iter()
+                    .map(|note| (note.path.clone(), note.title.clone()))
+                    .collect();
                 let paths = notes.into_iter().map(|note| note.path);
                 *session.resolver.borrow_mut() = Resolver::new(paths);
             }
@@ -638,6 +832,8 @@ fn refresh_links(state: &Rc<State>) {
     }
     // A note appearing or vanishing flips whether open links are broken.
     refresh_editor_links(state);
+    refresh_backlinks(state);
+    refresh_broken(state);
 }
 
 /// Refreshes the status bar note count from the index after a structural change,
@@ -696,6 +892,28 @@ fn restore_expanded(model: &TreeListModel, want: &HashSet<String>) {
 /// Expands every ancestor folder so the target row exists in the flattened list,
 /// then selects it. Used to highlight a freshly created or renamed note.
 fn select_in_tree(state: &Rc<State>, rel: &Path) {
+    // Remembered so a later rebuild, including one the watcher triggers after an
+    // in-app rename, does not drop the selection back to the first row.
+    state.wanted_row.replace(Some(rel.to_path_buf()));
+    reselect_wanted(state);
+}
+
+/// Reapplies the wanted row once the tree has settled.
+///
+/// A freshly installed `ListView` ignores focus until it is laid out, and then
+/// parks focus on its first row, so this always waits for the next idle turn.
+fn reselect_wanted(state: &Rc<State>) {
+    let state = Rc::clone(state);
+    gtk::glib::idle_add_local_once(move || {
+        let wanted = state.wanted_row.borrow().clone();
+        if let Some(rel) = wanted {
+            select_in_tree_now(&state, &rel);
+        }
+    });
+}
+
+/// Selects and focuses the row for `rel`, expanding its ancestors first.
+fn select_in_tree_now(state: &Rc<State>, rel: &Path) {
     // Expand every ancestor folder so the target row is present after the rebuild.
     let mut ancestors: HashSet<String> = HashSet::new();
     let mut cur = rel.parent();
@@ -726,7 +944,14 @@ fn select_in_tree(state: &Rc<State>, rel: &Path) {
             && let Some(node) = row.item().and_downcast::<gtk::StringObject>()
             && node.string().as_str() == want
         {
+            state.quiet_selection.set(true);
             selection.set_selected(i);
+            list_view.scroll_to(
+                i,
+                gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
+                None,
+            );
+            state.quiet_selection.set(false);
             break;
         }
     }
@@ -801,29 +1026,320 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_command_palette(app, state);
     wire_completion(state);
     wire_search(app, state);
+    wire_tags(app, state);
+    wire_report(app, state);
+    wire_editor_escape(state);
+}
+
+/// Install the broken-link report: its action, its status-bar count, and the
+/// back steps out of it.
+fn wire_report(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("broken-links", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| show_report(&open_state));
+    app.add_action(&action);
+
+    let clicked = Rc::clone(state);
+    state.broken.connect_clicked(move |_| show_report(&clicked));
+
+    let escaping = Rc::clone(state);
+    state.report_panel.connect_escape(move || report_back(&escaping));
+    let going_back = Rc::clone(state);
+    state.report_panel.connect_back(move || report_back(&going_back));
+}
+
+/// Steps the report back one level, leaving the sidebar when already at the top.
+fn report_back(state: &Rc<State>) {
+    if matches!(state.report_panel.view(), drill::View::Notes(_)) {
+        show_report(state);
+        return;
+    }
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Reveals the broken-link report, or closes it when it is already showing.
+fn show_report(state: &Rc<State>) {
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_REPORT);
+    if showing
+        && state.report_panel.has_focus()
+        && matches!(state.report_panel.view(), drill::View::Top)
+    {
+        state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+        state.editor.grab_focus();
+        return;
+    }
+
+    let Some(missing) = broken_targets(state) else {
+        return;
+    };
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_REPORT);
+    state.report_panel.show_top(&missing);
+    state.report_panel.focus_list();
+}
+
+/// Every missing link target with how many notes point at it, or `None` outside
+/// a vault.
+fn broken_targets(state: &Rc<State>) -> Option<Vec<(String, i64)>> {
+    let session = state.session.borrow();
+    let session = session.as_ref()?;
+    Some(session.index.broken_links().unwrap_or_default())
+}
+
+/// Updates the status-bar count, which stays hidden while nothing is broken.
+///
+/// Also refreshes the report when it is the page on screen, so fixing a link
+/// while it is open does not leave a stale list behind.
+fn refresh_broken(state: &Rc<State>) {
+    let Some(missing) = broken_targets(state) else {
+        state.broken.set_visible(false);
+        return;
+    };
+    state.broken.set_label(&broken_label(missing.len()));
+    state.broken.set_visible(!missing.is_empty());
+
+    if state.sidebar_stack.visible_child_name().as_deref() != Some(PAGE_REPORT) {
+        return;
+    }
+    // A target that is no longer broken has no page left to show, so the report
+    // steps back to the list rather than sitting on an empty one. The lists keep
+    // their own selection and focus across the redraw.
+    match state.report_panel.view() {
+        drill::View::Notes(target) if missing.iter().any(|(name, _)| *name == target) => {
+            show_broken_linkers(state, &target);
+        }
+        _ => state.report_panel.show_top(&missing),
+    }
+}
+
+/// The status-bar text for `count` missing targets.
+fn broken_label(count: usize) -> String {
+    match count {
+        1 => "1 broken link".to_string(),
+        many => format!("{many} broken links"),
+    }
+}
+
+/// Shows the notes pointing at `missing`, with the lines the dead links sit on.
+fn show_broken_linkers(state: &Rc<State>, missing: &str) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    // A target in the report resolves nowhere, so a link matches it by its
+    // written form alone.
+    let written = |target: &str| Some(target.to_string());
+    let hits: Vec<results::Hit> = session
+        .index
+        .broken_link_notes(missing)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|note| {
+            let text = session.vault.read_note(Path::new(&note.path)).ok()?;
+            let snippets =
+                backlinks::linking_lines(&text, missing, &written, MAX_BACKLINK_LINES);
+            (!snippets.is_empty()).then_some(results::Hit {
+                path: note.path,
+                snippets,
+            })
+        })
+        .collect();
+    state.report_panel.show_notes(missing, &hits);
+}
+
+/// Install Ctrl+Shift+T, and the tag page behavior behind it.
+fn wire_tags(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("tags", None);
+    let open_state = Rc::clone(state);
+    action.connect_activate(move |_, _| show_tags(&open_state));
+    app.add_action(&action);
+    app.set_accels_for_action("app.tags", &["<Primary><Shift>t"]);
+
+    // Escape and the back arrow both step one level: notes to tags, tags to tree.
+    let escaping = Rc::clone(state);
+    state.tags_panel.connect_escape(move || tags_back(&escaping));
+    let going_back = Rc::clone(state);
+    state.tags_panel.connect_back(move || tags_back(&going_back));
+}
+
+/// Steps the tag page back one level, leaving the sidebar when already at the top.
+fn tags_back(state: &Rc<State>) {
+    if matches!(state.tags_panel.view(), drill::View::Notes(_)) {
+        show_tags(state);
+        return;
+    }
+    state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+    state.editor.grab_focus();
+}
+
+/// Escape in the editor hands focus back to the sidebar page it came from.
+fn wire_editor_escape(state: &Rc<State>) {
+    let escaping = Rc::clone(state);
+    state.editor.connect_key_capture(move |key| {
+        if key != gdk::Key::Escape || escaping.completion.is_open() {
+            return false;
+        }
+        if !escaping.sidebar_stack.get_visible() {
+            return false;
+        }
+        match escaping.sidebar_stack.visible_child_name().as_deref() {
+            Some(PAGE_TAGS) => {
+                escaping.tags_panel.focus_list();
+                true
+            }
+            Some(PAGE_REPORT) => {
+                escaping.report_panel.focus_list();
+                true
+            }
+            Some(PAGE_SEARCH) => {
+                escaping.search_panel.focus();
+                true
+            }
+            _ => false,
+        }
+    });
+}
+
+/// Reveals the tag list, or closes the page when it is already showing.
+fn show_tags(state: &Rc<State>) {
+    let showing = state.sidebar_stack.get_visible()
+        && state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_TAGS);
+    if showing
+        && state.tags_panel.has_focus()
+        && matches!(state.tags_panel.view(), drill::View::Top)
+    {
+        state.sidebar_stack.set_visible_child_name(PAGE_TREE);
+        state.editor.grab_focus();
+        return;
+    }
+
+    let counts = {
+        let session = state.session.borrow();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        session.index.tag_counts().unwrap_or_default()
+    };
+    state.sidebar_stack.set_visible(true);
+    state.sidebar_stack.set_visible_child_name(PAGE_TAGS);
+    state.tags_panel.show_top(&counts);
+    state.tags_panel.focus_list();
+}
+
+/// Shows the notes carrying `tag`, with the lines the tag appears on.
+fn show_tagged_notes(state: &Rc<State>, tag: &str) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let notes = session.index.tagged_notes(tag).unwrap_or_default();
+    let terms = [format!("#{tag}")];
+    let hits: Vec<results::Hit> = notes
+        .into_iter()
+        .map(|note| {
+            let text = session
+                .vault
+                .read_note(Path::new(&note.path))
+                .unwrap_or_default();
+            results::Hit {
+                snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
+                path: note.path,
+            }
+        })
+        .collect();
+    state.tags_panel.show_notes(tag, &hits);
 }
 
 /// The state a search row activates through, filled in once the state exists.
 type LateState = Rc<RefCell<Option<Rc<State>>>>;
 
-/// Builds the two-page sidebar and the cell its rows activate through.
-fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Rc<search_panel::Panel>, Stack, LateState) {
+/// Builds the four-page sidebar and the cell its rows activate through.
+fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
     let opened: LateState = Rc::new(RefCell::new(None));
+
     let target = Rc::clone(&opened);
-    let panel = search_panel::Panel::new(accent, move |path, line| {
+    let search = search_panel::Panel::new(accent, move |path, line| {
         let state = target.borrow().clone();
         if let Some(state) = state {
             open_search_hit(&state, path, line);
         }
     });
 
+    let tag_target = Rc::clone(&opened);
+    let tags = drill::Panel::new(
+        drill::Kind::Tags,
+        accent,
+        move |tag| {
+            let state = tag_target.borrow().clone();
+            if let Some(state) = state {
+                show_tagged_notes(&state, tag);
+                state.tags_panel.focus_list();
+            }
+        },
+        open_through(&opened),
+    );
+
+    let broken_target = Rc::clone(&opened);
+    let report = drill::Panel::new(
+        drill::Kind::Broken,
+        accent,
+        move |missing| {
+            let state = broken_target.borrow().clone();
+            if let Some(state) = state {
+                show_broken_linkers(&state, missing);
+                state.report_panel.focus_list();
+            }
+        },
+        open_through(&opened),
+    );
+
     let stack = Stack::new();
     stack.add_named(tree, Some(PAGE_TREE));
-    stack.add_named(&panel.widget(), Some(PAGE_SEARCH));
+    stack.add_named(&search.widget(), Some(PAGE_SEARCH));
+    stack.add_named(&tags.widget(), Some(PAGE_TAGS));
+    stack.add_named(&report.widget(), Some(PAGE_REPORT));
     stack.set_visible_child_name(PAGE_TREE);
     stack.add_css_class("sidebar");
 
-    (panel, stack, opened)
+    (
+        Sidebar {
+            search,
+            tags,
+            report,
+            stack,
+        },
+        opened,
+    )
+}
+
+/// A row callback that opens a note at a line, once the state exists.
+fn open_through(opened: &LateState) -> impl Fn(&str, i32) + 'static {
+    let target = Rc::clone(opened);
+    move |path, line| {
+        let state = target.borrow().clone();
+        if let Some(state) = state {
+            open_search_hit(&state, path, line);
+        }
+    }
+}
+
+/// The sidebar pages, built together and handed to the state.
+struct Sidebar {
+    search: Rc<search_panel::Panel>,
+    tags: Rc<drill::Panel>,
+    report: Rc<drill::Panel>,
+    stack: Stack,
+}
+
+/// Builds the backlinks strip, opening notes through the state once it exists.
+fn build_backlinks(accent: &str, opened: &LateState) -> Rc<backlinks::Strip> {
+    backlinks::Strip::new(
+        accent,
+        Config::load().backlinks_expanded,
+        open_through(opened),
+    )
 }
 
 /// Install Ctrl+Shift+F, and the panel behavior behind it.
@@ -853,6 +1369,8 @@ fn wire_search(app: &Application, state: &Rc<State>) {
 
     let escaping = Rc::clone(state);
     state.search_panel.connect_escape(move || close_search(&escaping));
+    let going_back = Rc::clone(state);
+    state.search_panel.connect_back(move || close_search(&going_back));
 }
 
 /// Reveals the search page and puts the caret in its entry.
@@ -900,14 +1418,14 @@ fn run_search(state: &Rc<State>, query: &str) {
         .unwrap_or_default();
 
     // Snippets come from the file: notes_fts is contentless, so it has no text to quote.
-    let hits: Vec<search_panel::Hit> = notes
+    let hits: Vec<results::Hit> = notes
         .into_iter()
         .map(|note| {
             let text = session
                 .vault
                 .read_note(Path::new(&note.path))
                 .unwrap_or_default();
-            search_panel::Hit {
+            results::Hit {
                 snippets: search::snippets(&text, &terms, MAX_SEARCH_LINES),
                 path: note.path,
             }
@@ -1184,6 +1702,9 @@ fn toggle_theme_mode(state: &Rc<State>) {
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
     state.search_panel.set_accent(&next.chrome.accent);
+    state.tags_panel.set_accent(&next.chrome.accent);
+    state.report_panel.set_accent(&next.chrome.accent);
+    state.backlinks.set_accent(&next.chrome.accent);
     *state.theme.borrow_mut() = next;
 
     // Swapping the provider CSS does not always invalidate the sidebar
@@ -1422,8 +1943,25 @@ fn wire_save_on_close(window: &ApplicationWindow, state: &Rc<State>) {
     let close_state = Rc::clone(state);
     window.connect_close_request(move |_| {
         save_if_dirty(&close_state);
+        remember_layout(&close_state);
         gtk::glib::Propagation::Proceed
     });
+}
+
+/// Persists what the window looked like: the strip, and which folders are open.
+fn remember_layout(state: &Rc<State>) {
+    let expanded = state.session.borrow().as_ref().map(|session| {
+        (
+            session.vault.root().to_path_buf(),
+            expanded_paths(&session.tree_model.borrow()),
+        )
+    });
+    let mut config = state.config.borrow_mut();
+    config.backlinks_expanded = state.backlinks.is_expanded();
+    if let Some((root, folders)) = expanded {
+        config.set_expanded_folders(&root, &folders);
+    }
+    config.save();
 }
 
 /// Save the buffer if it has unsaved edits, and say nothing when it does not.
@@ -1466,6 +2004,10 @@ fn save_note(state: &Rc<State>) {
         Some(name) => {
             state.dirty.set(false);
             state.status.set_text(&format!("Saved {name}"));
+            refresh_titles(state);
+            refresh_backlinks(state);
+            refresh_broken(state);
+            refresh_window_title(state);
         }
         None => state.status.set_text("Nothing to save"),
     }
@@ -1534,7 +2076,11 @@ fn nearest_heading(headings: &[jotter_parser::HeadingAnchor], caret_1based: i32)
 fn wire_debounce(state: &Rc<State>) {
     let changed_state = Rc::clone(state);
     state.editor.connect_changed(move || {
+        let was_clean = !changed_state.dirty.get();
         changed_state.dirty.set(true);
+        if was_clean {
+            refresh_window_title(&changed_state);
+        }
 
         // Cancel a pending pass so only the latest change fires.
         if let Some(old) = changed_state.pending.borrow_mut().take() {
@@ -1633,6 +2179,9 @@ fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
         }
         if structural {
             refresh_tree(&drain_state);
+        } else {
+            // An external edit can rename the note without moving its file.
+            refresh_titles(&drain_state);
         }
         gtk::glib::ControlFlow::Continue
     });
@@ -1677,19 +2226,47 @@ fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
     }
 }
 
+/// What a delete asks before doing it. `notes` counts what a folder holds.
+fn delete_question(name: &str, notes: Option<usize>) -> String {
+    match notes {
+        None => format!("Delete \"{name}\" to trash?"),
+        Some(0) => format!("Delete the empty folder \"{name}\" to trash?"),
+        Some(1) => format!("Delete \"{name}\" and the 1 note inside it to trash?"),
+        Some(count) => format!("Delete \"{name}\" and the {count} notes inside it to trash?"),
+    }
+}
+
+/// What a right-clicked tree row is, which decides the menu wording.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Note,
+    Folder,
+}
+
+/// The context menu for a row of `kind`, or for empty space when there is none.
+fn tree_menu(kind: Option<Kind>) -> gio::Menu {
+    let menu = gio::Menu::new();
+    menu.append(Some("New note"), Some("app.tree-new-note"));
+    menu.append(Some("New folder"), Some("app.tree-new-folder"));
+    let Some(kind) = kind else {
+        return menu;
+    };
+    let (rename, delete) = match kind {
+        Kind::Note => ("Rename note", "Delete note to trash"),
+        Kind::Folder => ("Rename folder", "Delete folder to trash"),
+    };
+    menu.append(Some(rename), Some("app.tree-rename"));
+    menu.append(Some(delete), Some("app.tree-delete"));
+    menu
+}
+
 /// Wires a right-click context menu on the tree with note/folder operations.
 ///
 /// The right-clicked row (not the selection) is the operation target, resolved by
 /// hit-testing the click and stashed in `target` for the actions to read. A click
 /// in empty space leaves `target` as `None`, meaning the vault root.
 fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
-    let menu = gio::Menu::new();
-    menu.append(Some("New note"), Some("app.tree-new-note"));
-    menu.append(Some("New folder"), Some("app.tree-new-folder"));
-    menu.append(Some("Rename"), Some("app.tree-rename"));
-    menu.append(Some("Delete to trash"), Some("app.tree-delete"));
-
-    let popover = gtk::PopoverMenu::from_model(Some(&menu));
+    let popover = gtk::PopoverMenu::from_model(Some(&tree_menu(None)));
     popover.set_parent(list_view);
     popover.set_has_arrow(false);
 
@@ -1701,9 +2278,22 @@ fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
     let popover_click = popover.clone();
     let list_view_hit = list_view.clone();
     let target_press = Rc::clone(&target);
+    let menu_state = Rc::clone(state);
     gesture.connect_pressed(move |_, _, x, y| {
         // Resolve the target from the row under the pointer, not the prior selection.
-        *target_press.borrow_mut() = row_at(&list_view_hit, x, y);
+        let hit = row_at(&list_view_hit, x, y);
+        let kind = hit.as_ref().map(|rel| {
+            if is_file_node(&menu_state, &rel.to_string_lossy()) {
+                Kind::Note
+            } else {
+                Kind::Folder
+            }
+        });
+        popover_click.set_menu_model(Some(&tree_menu(kind)));
+        if let Some(rel) = hit.as_ref() {
+            select_in_tree_now(&menu_state, rel);
+        }
+        *target_press.borrow_mut() = hit;
         // Point the popover at the click; widget coordinates never exceed i32 range.
         let rect = gdk::Rectangle::new(px_to_i32(x), px_to_i32(y), 1, 1);
         popover_click.set_pointing_to(Some(&rect));
@@ -1786,7 +2376,7 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
     });
     app.add_action(&new_folder);
 
-    // Rename: only meaningful for a file target.
+    // Rename: a note keeps its .md, a folder is renamed with its whole subtree.
     let rename = gio::SimpleAction::new("tree-rename", None);
     let s = Rc::clone(state);
     let t = Rc::clone(target);
@@ -1794,22 +2384,25 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
         let Some(rel) = t.borrow().clone() else {
             return;
         };
-        if !is_file_node(&s, &rel.to_string_lossy()) {
-            return;
-        }
+        let is_file = is_file_node(&s, &rel.to_string_lossy());
         let default = rel
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("note.md")
             .to_owned();
+        let title = if is_file { "Rename note" } else { "Rename folder" };
         let s2 = Rc::clone(&s);
-        prompt(&s, "Rename note", &default, move |name| {
-            rename_note(&s2, &rel, &name);
+        prompt(&s, title, &default, move |name| {
+            if is_file {
+                rename_note(&s2, &rel, &name);
+            } else {
+                rename_folder(&s2, &rel, &name);
+            }
         });
     });
     app.add_action(&rename);
 
-    // Delete to trash: only for a file target.
+    // Delete to trash: a folder goes whole, with everything under it.
     let delete = gio::SimpleAction::new("tree-delete", None);
     let s = Rc::clone(state);
     let t = Rc::clone(target);
@@ -1817,11 +2410,134 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
         let Some(rel) = t.borrow().clone() else {
             return;
         };
-        if is_file_node(&s, &rel.to_string_lossy()) {
-            delete_note(&s, &rel);
-        }
+        let is_file = is_file_node(&s, &rel.to_string_lossy());
+        let name = rel.to_string_lossy().into_owned();
+        let inside = (!is_file).then(|| notes_under(&s, &rel).len());
+        let s2 = Rc::clone(&s);
+        confirm(&s, &delete_question(&name, inside), "Delete", move || {
+            if is_file {
+                delete_note(&s2, &rel);
+            } else {
+                delete_folder(&s2, &rel);
+            }
+        });
     });
     app.add_action(&delete);
+}
+
+/// Indexed notes living under `rel`, by vault-relative path.
+fn notes_under(state: &Rc<State>, rel: &Path) -> Vec<String> {
+    let prefix = format!("{}/", vault_session::rel_to_key(rel));
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return Vec::new();
+    };
+    session
+        .index
+        .all_notes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|note| note.path)
+        .filter(|path| path.starts_with(&prefix))
+        .collect()
+}
+
+/// Leaves the editor showing another note, or nothing when the vault is empty.
+fn close_current_note(state: &Rc<State>) {
+    if let Some(session) = state.session.borrow().as_ref() {
+        session.current.replace(None);
+    }
+    if let Some(rel) = first_note(state) {
+        load_note(state, &rel);
+        select_in_tree(state, &rel);
+        return;
+    }
+    state.editor.set_initial_text("");
+    state.dirty.set(false);
+    refresh_backlinks(state);
+    refresh_window_title(state);
+}
+
+/// Renames a folder and every note under it, following the open note if it moved.
+fn rename_folder(state: &Rc<State>, rel: &Path, name: &str) {
+    let name = name.trim();
+    if name.is_empty() || rel.as_os_str().is_empty() {
+        return;
+    }
+    let to = rel.parent().map(Path::to_path_buf).unwrap_or_default().join(name);
+    let moved_current = {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        if let Err(err) = session.vault.rename_note(rel, &to) {
+            eprintln!("jotter: could not rename folder {}: {err}", rel.display());
+            return;
+        }
+        reindex_moved(session, rel, Some(&to));
+        session
+            .current
+            .borrow()
+            .as_ref()
+            .and_then(|current| current.strip_prefix(rel).ok())
+            .map(|tail| to.join(tail))
+    };
+    refresh_tree(state);
+    match moved_current {
+        // The open note moved with the folder, so the tree follows the note.
+        Some(current) => {
+            load_note(state, &current);
+            select_in_tree(state, &current);
+        }
+        None => select_in_tree(state, &to),
+    }
+}
+
+/// Moves a folder to the trash with everything under it.
+fn delete_folder(state: &Rc<State>, rel: &Path) {
+    if rel.as_os_str().is_empty() {
+        return;
+    }
+    let held_current;
+    {
+        let session_ref = state.session.borrow();
+        let Some(session) = session_ref.as_ref() else {
+            return;
+        };
+        if let Err(err) = session.vault.delete_to_trash(rel) {
+            eprintln!("jotter: could not delete folder {}: {err}", rel.display());
+            return;
+        }
+        reindex_moved(session, rel, None);
+        held_current = session
+            .current
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| current.starts_with(rel));
+    }
+    refresh_tree(state);
+    if held_current {
+        close_current_note(state);
+    }
+}
+
+/// Moves index rows from under `from` to under `to`, or drops them when the
+/// folder went to the trash.
+fn reindex_moved(session: &VaultSession, from: &Path, to: Option<&Path>) {
+    let prefix = format!("{}/", vault_session::rel_to_key(from));
+    let Ok(notes) = session.index.all_notes() else {
+        return;
+    };
+    for note in notes.iter().filter(|note| note.path.starts_with(&prefix)) {
+        let old = PathBuf::from(&note.path);
+        let _ = vault_session::deindex_note(&session.index, &old);
+        if let Some(to) = to
+            && let Ok(tail) = old.strip_prefix(from)
+        {
+            let moved = to.join(tail);
+            let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, &moved);
+        }
+    }
 }
 
 /// Creates a note named `name` (defaulting the `.md` extension) under `dir`.
@@ -1935,6 +2651,7 @@ fn rename_note(state: &Rc<State>, rel: &Path, name: &str) {
 
 /// Moves the note at `rel` to the vault trash and drops it from the index.
 fn delete_note(state: &Rc<State>, rel: &Path) {
+    let was_current;
     {
         let session_ref = state.session.borrow();
         let Some(session) = session_ref.as_ref() else {
@@ -1949,8 +2666,12 @@ fn delete_note(state: &Rc<State>, rel: &Path) {
                 return;
             }
         }
+        was_current = session.current.borrow().as_deref() == Some(rel);
     }
     refresh_tree(state);
+    if was_current {
+        close_current_note(state);
+    }
 }
 
 /// Rounds a widget-local coordinate to a pixel, clamped to the `i32` range.
@@ -1981,6 +2702,64 @@ fn stem_of(path: &Path) -> String {
 ///
 /// Uses a plain transient `gtk::Window` (the old `gtk::Dialog` is deprecated since
 /// GTK 4.10). Enter or the OK button confirms, Escape or Cancel dismisses.
+fn confirm<F: Fn() + 'static>(state: &Rc<State>, question: &str, action: &str, on_yes: F) {
+    let parent = state.sidebar.root().and_downcast::<gtk::Window>();
+    let dialog = gtk::Window::builder()
+        .title("Confirm")
+        .modal(true)
+        .default_width(380)
+        .build();
+    if let Some(parent) = parent.as_ref() {
+        dialog.set_transient_for(Some(parent));
+    }
+
+    let content = gtk::Box::new(Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    content.append(
+        &gtk::Label::builder()
+            .label(question)
+            .xalign(0.0)
+            .wrap(true)
+            .build(),
+    );
+
+    let buttons = gtk::Box::new(Orientation::Horizontal, 8);
+    buttons.set_halign(gtk::Align::End);
+    let cancel = gtk::Button::with_label("Cancel");
+    let go = gtk::Button::with_label(action);
+    go.add_css_class("destructive-action");
+    buttons.append(&cancel);
+    buttons.append(&go);
+    content.append(&buttons);
+    dialog.set_child(Some(&content));
+
+    let go_dialog = dialog.clone();
+    go.connect_clicked(move |_| {
+        on_yes();
+        go_dialog.close();
+    });
+    let cancel_dialog = dialog.clone();
+    cancel.connect_clicked(move |_| cancel_dialog.close());
+
+    let escape = gtk::EventControllerKey::new();
+    let escape_dialog = dialog.clone();
+    escape.connect_key_pressed(move |_, key, _, _| {
+        if key == gdk::Key::Escape {
+            escape_dialog.close();
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    dialog.add_controller(escape);
+
+    dialog.present();
+    cancel.grab_focus();
+}
+
+/// Prompts for one line of text, running `on_ok` with what was typed.
 fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str, on_ok: F) {
     let parent = state.sidebar.root().and_downcast::<gtk::Window>();
     let dialog = gtk::Window::builder()
@@ -2034,6 +2813,50 @@ fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str
 
 #[cfg(test)]
 mod tests {
+    use super::{broken_label, delete_question};
+
+    #[test]
+    fn one_broken_link_reads_singular() {
+        assert_eq!(broken_label(1), "1 broken link");
+    }
+
+    #[test]
+    fn broken_links_are_counted() {
+        assert_eq!(broken_label(4), "4 broken links");
+    }
+
+    #[test]
+    fn deleting_a_note_names_it() {
+        assert_eq!(
+            delete_question("notes/plan.md", None),
+            "Delete \"notes/plan.md\" to trash?"
+        );
+    }
+
+    #[test]
+    fn deleting_a_folder_counts_what_goes_with_it() {
+        assert_eq!(
+            delete_question("scratch", Some(3)),
+            "Delete \"scratch\" and the 3 notes inside it to trash?"
+        );
+    }
+
+    #[test]
+    fn one_note_inside_reads_singular() {
+        assert_eq!(
+            delete_question("scratch", Some(1)),
+            "Delete \"scratch\" and the 1 note inside it to trash?"
+        );
+    }
+
+    #[test]
+    fn an_empty_folder_says_it_is_empty() {
+        assert_eq!(
+            delete_question("scratch", Some(0)),
+            "Delete the empty folder \"scratch\" to trash?"
+        );
+    }
+
     use super::{Startup, resolve_startup};
     use crate::config::Config;
     use std::path::Path;

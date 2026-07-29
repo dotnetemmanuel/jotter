@@ -1,14 +1,14 @@
-//! Pure note-title extraction: frontmatter `title:`, else first H1, else filename stem.
+//! Pure note-title extraction: frontmatter `title`, else first H1, else filename stem.
 
 use std::path::Path;
 
 /// Derives a display title from note text and its vault-relative path.
 ///
-/// Resolution order: a `title:` in a leading `---` frontmatter block, else the
-/// first `# H1` line, else the filename stem. Always returns something usable.
+/// Resolution order: a `title` in the frontmatter block, else the first `# H1`
+/// line, else the filename stem. Always returns something usable.
 #[must_use]
 pub fn extract_title(text: &str, rel_path: &Path) -> String {
-    if let Some(title) = frontmatter_title(text) {
+    if let Some(title) = jotter_parser::frontmatter::parse(text).title {
         return title;
     }
     if let Some(h1) = first_h1(text) {
@@ -26,32 +26,6 @@ fn stem(rel_path: &Path) -> String {
         .map_or_else(|| "untitled".to_owned(), str::to_owned)
 }
 
-/// Reads a `title:` value from a leading `---` fenced frontmatter block.
-///
-/// Only a block that starts on the very first line is considered. The value is
-/// trimmed and stripped of one layer of matching single or double quotes.
-fn frontmatter_title(text: &str) -> Option<String> {
-    let mut lines = text.lines();
-    // The block must open with a bare `---` on the first line.
-    if lines.next().map(str::trim) != Some("---") {
-        return None;
-    }
-    for line in lines {
-        let trimmed = line.trim();
-        // A closing fence ends the block without a title.
-        if trimmed == "---" || trimmed == "..." {
-            return None;
-        }
-        if let Some(rest) = trimmed.strip_prefix("title:") {
-            let value = unquote(rest.trim());
-            if !value.is_empty() {
-                return Some(value);
-            }
-        }
-    }
-    None
-}
-
 /// The text of the first ATX `# ` heading, trimmed, if any.
 fn first_h1(text: &str) -> Option<String> {
     for line in text.lines() {
@@ -65,23 +39,36 @@ fn first_h1(text: &str) -> Option<String> {
     None
 }
 
-/// Strips one matching pair of surrounding single or double quotes.
-fn unquote(value: &str) -> String {
-    let bytes = value.as_bytes();
-    if value.len() >= 2 {
-        let first = bytes[0];
-        let last = bytes[value.len() - 1];
-        if (first == b'"' || first == b'\'') && first == last {
-            return value[1..value.len() - 1].to_owned();
-        }
-    }
-    value.to_owned()
+/// The window title: the open note, an unsaved marker, and the app name.
+#[must_use]
+pub fn window_title(note: Option<&str>, dirty: bool) -> String {
+    let Some(note) = note else {
+        return "jotter".to_string();
+    };
+    let marker = if dirty { "\u{2022} " } else { "" };
+    format!("{marker}{note} - jotter")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::extract_title;
+    use super::{extract_title, window_title};
     use std::path::Path;
+
+    #[test]
+    fn no_note_leaves_the_bare_app_name() {
+        assert_eq!(window_title(None, false), "jotter");
+        assert_eq!(window_title(None, true), "jotter");
+    }
+
+    #[test]
+    fn a_saved_note_is_named_plainly() {
+        assert_eq!(window_title(Some("phase3-plan"), false), "phase3-plan - jotter");
+    }
+
+    #[test]
+    fn unsaved_edits_get_a_marker() {
+        assert_eq!(window_title(Some("phase3-plan"), true), "\u{2022} phase3-plan - jotter");
+    }
 
     #[test]
     fn frontmatter_title_wins() {
