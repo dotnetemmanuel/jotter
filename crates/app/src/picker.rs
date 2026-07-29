@@ -71,30 +71,7 @@ where
     let activate = Rc::new(activate);
     let on_close = Rc::new(on_close);
 
-    let entry = gtk::Entry::builder()
-        .placeholder_text(placeholder)
-        .text(initial_query)
-        .build();
-
-    let selection = SingleSelection::new(Some(gtk::StringList::new(&[])));
-    let list_view = ListView::new(Some(selection.clone()), Some(row_factory(&rows)));
-    list_view.add_css_class("picker-list");
-
-    let scroller = ScrolledWindow::builder()
-        .max_content_height(360)
-        .propagate_natural_height(true)
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .child(&list_view)
-        .build();
-
-    let panel = gtk::Box::new(Orientation::Vertical, 0);
-    panel.add_css_class("picker");
-    panel.set_halign(Align::Center);
-    panel.set_valign(Align::Start);
-    panel.set_margin_top(56);
-    panel.set_size_request(560, -1);
-    panel.append(&entry);
-    panel.append(&scroller);
+    let (panel, entry, selection, list_view) = build_panel(placeholder, initial_query, &rows);
 
     // Covers the window so a click anywhere outside the panel dismisses it.
     let scrim = gtk::Box::new(Orientation::Vertical, 0);
@@ -183,6 +160,42 @@ where
     Handle { entry, close }
 }
 
+/// The floating panel: query entry above a list, centred near the top.
+fn build_panel(
+    placeholder: &str,
+    initial_query: &str,
+    rows: &Rc<RefCell<Vec<Row>>>,
+) -> (gtk::Box, gtk::Entry, SingleSelection, ListView) {
+    let entry = gtk::Entry::builder()
+        .placeholder_text(placeholder)
+        .text(initial_query)
+        .build();
+
+    let selection = SingleSelection::new(Some(gtk::StringList::new(&[])));
+    let list_view = ListView::new(Some(selection.clone()), Some(row_factory(rows)));
+    list_view.add_css_class("picker-list");
+    // A ListView activates on double click by default. In a palette you have
+    // already chosen by the time you reach for the mouse.
+    list_view.set_single_click_activate(true);
+
+    let scroller = ScrolledWindow::builder()
+        .max_content_height(360)
+        .propagate_natural_height(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&list_view)
+        .build();
+
+    let panel = gtk::Box::new(Orientation::Vertical, 0);
+    panel.add_css_class("picker");
+    panel.set_halign(Align::Center);
+    panel.set_valign(Align::Start);
+    panel.set_margin_top(56);
+    panel.set_size_request(560, -1);
+    panel.append(&entry);
+    panel.append(&scroller);
+
+    (panel, entry, selection, list_view)
+}
 /// Builds the two-label row factory, reading each row out of `rows` on bind.
 fn row_factory(rows: &Rc<RefCell<Vec<Row>>>) -> SignalListItemFactory {
     let factory = SignalListItemFactory::new();
@@ -378,3 +391,4 @@ mod tests {
         assert_eq!(highlight("café", &[3]), "caf<b>é</b>");
     }
 }
+

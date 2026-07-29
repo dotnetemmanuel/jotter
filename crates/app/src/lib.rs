@@ -1996,7 +1996,7 @@ fn accel_label(app: &Application, action: &str) -> String {
     let Some((key, mods)) = gtk::accelerator_parse(first) else {
         return String::new();
     };
-    gtk::accelerator_get_label(key, mods).to_string()
+    commands::tidy_accel(&gtk::accelerator_get_label(key, mods))
 }
 
 /// Every note the switcher can offer, from the index, falling back to the vault
