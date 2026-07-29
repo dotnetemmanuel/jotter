@@ -26,6 +26,7 @@ mod themes;
 mod title;
 mod tree;
 mod vault_session;
+mod vaults;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -97,7 +98,7 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 9] = [
+const PALETTE_COMMANDS: [(&str, &str); 10] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
@@ -107,6 +108,7 @@ const PALETTE_COMMANDS: [(&str, &str); 9] = [
     ("search", "Search notes"),
     ("broken-links", "Show broken links"),
     ("settings", "Settings"),
+    ("open-vault", "Open vault"),
 ];
 
 /// Fallback document shown when no path is given or a read fails.
@@ -160,6 +162,8 @@ struct State {
     pending: RefCell<Option<SourceId>>,
     /// The left sidebar container, whose visibility `Ctrl+B` toggles.
     sidebar: ScrolledWindow,
+    /// The open vault's name, above the tree.
+    vault_name: Label,
     /// The bottom status label (indexing progress, note counts).
     status: Label,
     /// The broken-link count at the right of the status bar, hidden when zero.
@@ -242,6 +246,8 @@ pub fn run() -> gtk::glib::ExitCode {
 enum Startup {
     /// Open `root` as a vault, restoring `note` (vault-relative) if present.
     Vault { root: PathBuf, note: Option<PathBuf> },
+    /// Ask which of the known vaults to open.
+    Pick,
     /// Open a single markdown file (no sidebar). `None` means the built-in sample.
     File(Option<PathBuf>),
 }
@@ -260,13 +266,17 @@ fn resolve_startup(arg: Option<&str>, config: &Config) -> Startup {
         }
         return Startup::File(Some(path));
     }
-    if let Some(root) = config.most_recent_vault()
-        && root.is_dir()
-    {
-        let note = config.last_active_for(&root);
-        return Startup::Vault { root, note };
+    // More than one vault to choose from is a question, not a guess; a single
+    // one is not worth asking about.
+    let known = vaults::known(&config.recent_vaults);
+    match known.len() {
+        0 => Startup::File(None),
+        1 => Startup::Vault {
+            note: config.last_active_for(&known[0].path),
+            root: known[0].path.clone(),
+        },
+        _ => Startup::Pick,
     }
-    Startup::File(None)
 }
 
 /// Apply a theme's chrome CSS to the display through `provider`, creating the
@@ -320,7 +330,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
 
     let (status_bar, status, broken, git, size) = build_status_bar();
 
-    let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
+    let (vault_name, tree_page) = build_tree_page(&sidebar);
+    let (pages, opened) = build_sidebar(&tree_page, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
 
     // Built here because it needs the same late-bound state the sidebar rows use.
@@ -342,6 +353,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         cached_caret: RefCell::new(0),
         pending: RefCell::new(None),
         sidebar: sidebar.clone(),
+        vault_name: vault_name.clone(),
         status: status.clone(),
         broken,
         git: git.clone(),
@@ -378,6 +390,12 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     match startup {
         Startup::Vault { root, note } => open_vault(&state, &root, note.as_deref()),
         Startup::File(path) => open_single_file(&state, path.as_deref()),
+        Startup::Pick => {
+            open_single_file(&state, None);
+            let picking = Rc::clone(&state);
+            // After the window exists: the picker is an overlay on it.
+            gtk::glib::idle_add_local_once(move || pick_vault(&picking));
+        }
     }
 
     wire_actions(app, &state);
@@ -474,6 +492,24 @@ fn startup_theme(config: &Config) -> Option<(ThemeFile, Theme)> {
     }
 }
 
+/// The tree page: the vault's name over the tree, so which vault is open is
+/// answerable at a glance rather than from the window title.
+fn build_tree_page(tree: &ScrolledWindow) -> (Label, gtk::Box) {
+    let name = Label::builder()
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::Middle)
+        .build();
+    name.add_css_class("vault-name");
+
+    // The header takes its own height; the tree takes the rest, or it collapses
+    // to a couple of rows inside the box.
+    tree.set_vexpand(true);
+    let page = gtk::Box::new(Orientation::Vertical, 0);
+    page.append(&name);
+    page.append(tree);
+    (name, page)
+}
+
 /// Lays the window out: rail, then the paned area, with the status bar under
 /// both. The rail sits outside the paned area, so `Ctrl+B` collapses the tree
 /// and leaves the rail where it is.
@@ -548,12 +584,144 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     state.dirty.set(false);
     // Single-file mode has an empty, non-interactive sidebar.
     state.status.set_text("no vault open");
+    state.vault_name.set_visible(false);
     stop_git(state);
+}
+
+/// The row key the vault picker uses for "somewhere else".
+const BROWSE_KEY: &str = "\u{0}browse";
+
+/// Offers the vaults jotter knows, and a way to a folder it does not.
+fn pick_vault(state: &Rc<State>) {
+    let known = vaults::known(&state.config.borrow().recent_vaults);
+
+    let rows: Vec<picker::Row> = known
+        .iter()
+        .map(|vault| picker::Row {
+            key: vault.path.display().to_string(),
+            label: vault.name.clone(),
+            detail: vault.path.display().to_string(),
+            positions: Vec::new(),
+        })
+        .chain(std::iter::once(picker::Row {
+            key: BROWSE_KEY.to_string(),
+            label: "Open another folder...".to_string(),
+            detail: String::new(),
+            positions: Vec::new(),
+        }))
+        .collect();
+
+    let source = move |query: &str| {
+        let query = query.trim().to_lowercase();
+        rows.iter()
+            .filter(|row| {
+                query.is_empty()
+                    || row.key == BROWSE_KEY
+                    || row.label.to_lowercase().contains(&query)
+                    || row.detail.to_lowercase().contains(&query)
+            })
+            .map(|row| picker::Row {
+                key: row.key.clone(),
+                label: row.label.clone(),
+                detail: row.detail.clone(),
+                positions: Vec::new(),
+            })
+            .collect()
+    };
+
+    let chosen = Rc::clone(state);
+    let closing = Rc::clone(state);
+    let handle = picker::open(
+        &state.overlay,
+        "Open which vault?",
+        "",
+        source,
+        move |key| {
+            if key == BROWSE_KEY {
+                browse_for_vault(&chosen);
+                return;
+            }
+            let root = PathBuf::from(key);
+            let note = chosen.config.borrow().last_active_for(&root);
+            open_vault(&chosen, &root, note.as_deref());
+        },
+        move || {
+            closing.picker.replace(None);
+        },
+    );
+    state.picker.replace(Some(handle));
+}
+
+/// Where to go when a folder is not adopted: another known vault, or the sample.
+fn fall_back_from_vault(state: &Rc<State>) {
+    if state.session.borrow().is_some() {
+        return;
+    }
+    if vaults::known(&state.config.borrow().recent_vaults).is_empty() {
+        open_single_file(state, None);
+        return;
+    }
+    pick_vault(state);
+}
+
+/// Asks the desktop for a folder, then opens it (asking first if it is new).
+fn browse_for_vault(state: &Rc<State>) {
+    let parent = state.overlay.root().and_downcast::<gtk::Window>();
+    let dialog = gtk::FileDialog::builder()
+        .title("Choose a folder to open as a vault")
+        .modal(true)
+        .build();
+    let opening = Rc::clone(state);
+    dialog.select_folder(
+        parent.as_ref(),
+        None::<&gio::Cancellable>,
+        move |result| {
+            if let Ok(folder) = result
+                && let Some(path) = folder.path()
+            {
+                open_vault(&opening, &path, None);
+            }
+        },
+    );
+}
+
+/// Opens `root`, asking first when the folder has never been a vault.
+///
+/// Adopting a folder writes a `.jotter` directory into it and indexes every
+/// markdown file underneath, which is not something to do to a folder someone
+/// pointed at by accident, or to a home directory.
+fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
+    if vaults::is_vault(root) {
+        open_vault_now(state, root, note);
+        return;
+    }
+
+    let (notes, more) = vaults::count_notes(root);
+    let question = vaults::adopt_question(root, notes, more);
+    let asking = Rc::clone(state);
+    let root = root.to_path_buf();
+    let note = note.map(Path::to_path_buf);
+    // Deferred: at startup the window does not exist yet, and a modal dialog
+    // needs a parent to be modal to.
+    gtk::glib::idle_add_local_once(move || {
+        let opening = Rc::clone(&asking);
+        let refused = Rc::clone(&asking);
+        confirm_tone(
+            &asking,
+            &question,
+            "Open as vault",
+            false,
+            move || open_vault_now(&opening, &root, note.as_deref()),
+            // Saying no must land somewhere: the vaults already known, or the
+            // sample, rather than an empty window with nothing to do.
+            move || fall_back_from_vault(&refused),
+        );
+    });
 }
 
 /// Opens `root` as a vault: builds the tree, records it in recents, starts the
 /// background index and the watcher, and loads the requested (or first) note.
-fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
+fn open_vault_now(state: &Rc<State>, root: &Path, note: Option<&Path>) {
     let vault = match Vault::open(root) {
         Ok(vault) => vault,
         Err(err) => {
@@ -597,6 +765,11 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         titles: RefCell::new(HashMap::new()),
         is_git: jotter_git::Repo::discover(root).is_some(),
     }));
+
+    state.vault_name.set_text(&vaults::known(&[root.display().to_string()])
+        .first()
+        .map_or_else(|| root.display().to_string(), |vault| vault.name.clone()));
+    state.vault_name.set_visible(true);
 
     // Written whether or not the vault is a repo: one that becomes one later is
     // covered without jotter having to notice.
@@ -804,6 +977,17 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
         let shown = note_title(&bind_state, &rel).filter(|found| found != stem);
         title.set_text(shown.as_deref().unwrap_or_default());
         title.set_visible(shown.is_some());
+
+        // A file jotter cannot open is shown so its folder does not look empty,
+        // but dimmed and inert: no selection, no activation, nothing to click.
+        let openable = row.is_expandable() || tree::is_markdown_name(&rel);
+        item.set_selectable(openable);
+        item.set_activatable(openable);
+        if openable {
+            name.remove_css_class("tree-inert");
+        } else {
+            name.add_css_class("tree-inert");
+        }
     });
 
     let list_view = ListView::new(Some(selection.clone()), Some(factory));
@@ -1518,6 +1702,12 @@ fn wire_settings(app: &Application, state: &Rc<State>) {
     app.add_action(&action);
     app.set_accels_for_action("app.settings", &["<Primary>comma"]);
 
+    let open_vault_action = gio::SimpleAction::new("open-vault", None);
+    let picking = Rc::clone(state);
+    open_vault_action.connect_activate(move |_, _| pick_vault(&picking));
+    app.add_action(&open_vault_action);
+    app.set_accels_for_action("app.open-vault", &["<Primary><Shift>o"]);
+
     let reset = gio::SimpleAction::new("font-reset", None);
     let resetting = Rc::clone(state);
     reset.connect_activate(move |_, _| reset_font_size(&resetting));
@@ -1829,7 +2019,7 @@ fn show_tagged_notes(state: &Rc<State>, tag: &str) {
 type LateState = Rc<RefCell<Option<Rc<State>>>>;
 
 /// Builds the four-page sidebar and the cell its rows activate through.
-fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
+fn build_sidebar(tree: &gtk::Box, accent: &str) -> (Sidebar, LateState) {
     let opened: LateState = Rc::new(RefCell::new(None));
 
     let target = Rc::clone(&opened);
@@ -3665,6 +3855,19 @@ fn stem_of(path: &Path) -> String {
 /// Uses a plain transient `gtk::Window` (the old `gtk::Dialog` is deprecated since
 /// GTK 4.10). Enter or the OK button confirms, Escape or Cancel dismisses.
 fn confirm<F: Fn() + 'static>(state: &Rc<State>, question: &str, action: &str, on_yes: F) {
+    confirm_tone(state, question, action, true, on_yes, || {});
+}
+
+/// A confirmation whose button is styled by what it does: red for a deletion,
+/// accented for something merely consequential.
+fn confirm_tone<F: Fn() + 'static, N: Fn() + 'static>(
+    state: &Rc<State>,
+    question: &str,
+    action: &str,
+    destructive: bool,
+    on_yes: F,
+    on_no: N,
+) {
     let parent = state.sidebar.root().and_downcast::<gtk::Window>();
     let dialog = gtk::Window::builder()
         .title("Confirm")
@@ -3692,19 +3895,37 @@ fn confirm<F: Fn() + 'static>(state: &Rc<State>, question: &str, action: &str, o
     buttons.set_halign(gtk::Align::End);
     let cancel = gtk::Button::with_label("Cancel");
     let go = gtk::Button::with_label(action);
-    go.add_css_class("destructive-action");
+    go.add_css_class(if destructive {
+        "destructive-action"
+    } else {
+        "suggested-action"
+    });
     buttons.append(&cancel);
     buttons.append(&go);
     content.append(&buttons);
     dialog.set_child(Some(&content));
 
+    // Answered once, whichever way: the close handler runs `on_no` unless the
+    // action already ran, so Escape and the window's X count as a no.
+    let answered = Rc::new(Cell::new(false));
+
     let go_dialog = dialog.clone();
+    let said_yes = Rc::clone(&answered);
     go.connect_clicked(move |_| {
+        said_yes.set(true);
         on_yes();
         go_dialog.close();
     });
     let cancel_dialog = dialog.clone();
     cancel.connect_clicked(move |_| cancel_dialog.close());
+
+    let refused = Rc::clone(&answered);
+    dialog.connect_close_request(move |_| {
+        if !refused.get() {
+            on_no();
+        }
+        gtk::glib::Propagation::Proceed
+    });
 
     let escape = gtk::EventControllerKey::new();
     let escape_dialog = dialog.clone();
@@ -3840,7 +4061,9 @@ mod tests {
                 assert_eq!(root, tmp.path());
                 assert!(note.is_none());
             }
-            Startup::File(_) => panic!("expected vault startup for a directory arg"),
+            Startup::File(_) | Startup::Pick => {
+                panic!("expected vault startup for a directory arg")
+            }
         }
     }
 
@@ -3853,7 +4076,9 @@ mod tests {
         match resolve_startup(Some(&file.to_string_lossy()), &config) {
             Startup::File(Some(path)) => assert_eq!(path, file),
             Startup::File(None) => panic!("expected the file path, got the sample fallback"),
-            Startup::Vault { .. } => panic!("expected single-file startup, got a vault"),
+            Startup::Vault { .. } | Startup::Pick => {
+                panic!("expected single-file startup, got a vault")
+            }
         }
     }
 
@@ -3861,6 +4086,34 @@ mod tests {
     fn no_arg_no_config_uses_sample() {
         let config = Config::default();
         assert!(matches!(resolve_startup(None, &config), Startup::File(None)));
+    }
+
+    #[test]
+    fn two_known_vaults_ask_rather_than_guess() {
+        let tmp = TempDir::new().unwrap();
+        let one = tmp.path().join("one");
+        let two = tmp.path().join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut config = Config::default();
+        config.push_recent(&one);
+        config.push_recent(&two);
+        assert!(matches!(resolve_startup(None, &config), Startup::Pick));
+    }
+
+    #[test]
+    fn a_remembered_vault_that_has_gone_is_not_offered() {
+        let tmp = TempDir::new().unwrap();
+        let here = tmp.path().join("here");
+        std::fs::create_dir_all(&here).unwrap();
+        let mut config = Config::default();
+        config.push_recent(&here);
+        config.push_recent(&tmp.path().join("deleted-since"));
+        // One survivor, so it opens rather than asking.
+        match resolve_startup(None, &config) {
+            Startup::Vault { root, .. } => assert_eq!(root, here),
+            _ => panic!("expected the surviving vault"),
+        }
     }
 
     #[test]
@@ -3875,7 +4128,9 @@ mod tests {
                 assert_eq!(root, tmp.path());
                 assert_eq!(note.as_deref(), Some(Path::new("a.md")));
             }
-            Startup::File(_) => panic!("expected a recent vault, got single-file startup"),
+            Startup::File(_) | Startup::Pick => {
+                panic!("expected a recent vault, got single-file startup")
+            }
         }
     }
 }

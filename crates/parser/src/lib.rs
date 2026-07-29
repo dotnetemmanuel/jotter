@@ -44,6 +44,10 @@ fn base_options() -> Options<'static> {
     options.extension.footnotes = true;
     options.extension.header_id_prefix = Some(String::new());
     options.extension.front_matter_delimiter = Some("---".into());
+    // Raw HTML in a note is rendered rather than escaped: people write tables
+    // and the odd <br> by hand and expect to see them. The preview runs with
+    // markup JavaScript disabled, so a <script> in a note still does nothing.
+    options.render.r#unsafe = true;
     options
 }
 

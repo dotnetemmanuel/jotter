@@ -28,6 +28,8 @@ paned > separator {{\n  background-color: {overlay};\n  background-image: none;\
 .sidebar listview > row {{\n  border-radius: {r}px;\n  padding: 3px 8px;\n  margin: 1px 6px;\n}}\n\n\
 .sidebar listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .sidebar listview > row:focus-within {{\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.vault-name {{\n  color: {muted};\n  font-size: {small}px;\n  font-weight: bold;\n  padding: 8px 10px 4px 10px;\n}}\n\n\
+.tree-inert {{\n  color: {muted};\n  opacity: 0.55;\n}}\n\n\
 .tree-title {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
 .sidebar listview > row:selected .tree-title {{\n  color: alpha({bg}, 0.7);\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\

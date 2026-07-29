@@ -111,11 +111,6 @@ impl Config {
         self.recent_vaults = push_recent(std::mem::take(&mut self.recent_vaults), key);
     }
 
-    /// The most-recent vault root, if any exists.
-    #[must_use]
-    pub fn most_recent_vault(&self) -> Option<PathBuf> {
-        self.recent_vaults.first().map(PathBuf::from)
-    }
 
     /// Records `rel` as the last-active note for vault `root`.
     pub fn set_last_active(&mut self, root: &Path, rel: &Path) {

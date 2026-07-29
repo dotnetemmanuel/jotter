@@ -56,6 +56,18 @@ paned > separator {
   box-shadow: inset 2px 0 0 0 #faa968;
 }
 
+.vault-name {
+  color: #6d8f8a;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 8px 10px 4px 10px;
+}
+
+.tree-inert {
+  color: #6d8f8a;
+  opacity: 0.55;
+}
+
 .tree-title {
   color: #6d8f8a;
   font-size: 14px;

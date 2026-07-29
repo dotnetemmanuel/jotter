@@ -441,6 +441,12 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
   today a bare `jotter` silently reopens the most recent vault. Reuses the picker
   widget the palette and switcher already share.
 
+- **Images do not render in the preview.** Each render is written to
+  `{cache}/jotter/preview-{n}.html` and loaded from there, so a relative image
+  path resolves against the cache directory rather than the note's folder.
+  Likely fix: rewrite image sources to absolute `file://` URIs at render time,
+  where wikilinks are already rewritten.
+
 Font choice and theme choice both reach into `crates/theming`, which currently
 takes typography from the theme file. Settings must override it per user without
 editing the bundled themes.
