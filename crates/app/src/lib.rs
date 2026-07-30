@@ -339,7 +339,7 @@ const LOGO_SVG: &str = include_str!("../../../resources/icons/jotter-symbolic.sv
 /// The headerbar logo, stamped in `color`.
 fn logo_image(color: &str) -> gtk::Image {
     let image = gtk::Image::new();
-    image.set_pixel_size(32);
+    image.set_pixel_size(40);
     stamp_logo(&image, color);
     image
 }
@@ -350,8 +350,9 @@ fn stamp_logo(image: &gtk::Image, color: &str) {
     let svg = LOGO_SVG.replace("currentColor", color);
     let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("svg").ok();
     let pixbuf = loader.and_then(|loader| {
-        // Rendered at twice the display size so a scaled monitor stays crisp.
-        loader.set_size(64, 64);
+        // Twice the display size so a scaled monitor stays crisp, in the
+        // mark's own 816:600 aspect so nothing distorts.
+        loader.set_size(80, 59);
         loader.write(svg.as_bytes()).ok()?;
         loader.close().ok()?;
         loader.pixbuf()

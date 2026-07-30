@@ -12,9 +12,10 @@ BIN="$HOME/.local/bin/jotter"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
 APP_ID="dev.jotter.Jotter"
-# The retro82 accent, stamped into the icon: currentColor has no meaning in a
-# launcher, where it would fall back to black.
-ICON_COLOR="#d9762b"
+# The retro82 dark text color, matching the ink the headerbar gives the same
+# mark: currentColor has no meaning in a launcher, where it would fall back to
+# black.
+ICON_COLOR="#f6dcac"
 
 cargo build --release
 
@@ -29,7 +30,9 @@ if command -v rsvg-convert >/dev/null; then
     for size in 48 128 256; do
         dir="$HOME/.local/share/icons/hicolor/${size}x${size}/apps"
         mkdir -p "$dir"
-        rsvg-convert -w "$size" -h "$size" "$ICONS/$APP_ID.svg" > "$dir/$APP_ID.png"
+        # Width only, then pad to square: the mark is wider than tall, and
+        # forcing both dimensions would squash it.
+        rsvg-convert -w "$size" "$ICONS/$APP_ID.svg" | magick - -background none -gravity center -extent "${size}x${size}" "$dir/$APP_ID.png"
     done
 fi
 command -v gtk-update-icon-cache >/dev/null \
