@@ -7,6 +7,7 @@
 //! initialized display.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -31,6 +32,8 @@ pub struct Editor {
     inert_tag: gtk::TextTag,
     /// Byte ranges of the followable links, for the Ctrl+hover cursor.
     link_ranges: Rc<RefCell<Vec<Range<usize>>>>,
+    /// One tag per code color in use, keyed by `#rrggbb`.
+    code_tags: Rc<RefCell<HashMap<String, gtk::TextTag>>>,
     /// The font rule, reloaded in place when the theme or the size changes.
     font_provider: gtk::CssProvider,
 }
@@ -121,11 +124,18 @@ impl Editor {
         table.add(&link_tag);
         table.add(&broken_link_tag);
 
+        let code_tags: Rc<RefCell<HashMap<String, gtk::TextTag>>> =
+            Rc::new(RefCell::new(HashMap::new()));
+
         // The highlight engine adds its tags lazily, outranking ours on a fresh
-        // load, so take the top back every time it finishes a region.
+        // load, so take the top back every time it finishes a region: code colors
+        // above the grammar, links above the code colors.
         {
             let tags = [inert_tag.clone(), broken_link_tag.clone(), link_tag.clone()];
+            let code = Rc::clone(&code_tags);
             buffer.connect_highlight_updated(move |buffer, _, _| {
+                let colored: Vec<_> = code.borrow().values().cloned().collect();
+                raise_tags(&buffer.tag_table(), &colored);
                 raise_tags(&buffer.tag_table(), &tags);
             });
         }
@@ -141,6 +151,7 @@ impl Editor {
             broken_link_tag,
             inert_tag,
             link_ranges,
+            code_tags,
             font_provider,
         }
     }
@@ -230,6 +241,61 @@ impl Editor {
                 self.link_tag.clone(),
             ],
         );
+    }
+
+
+    /// Color the fenced code blocks, replacing whatever colors were there.
+    ///
+    /// Each span carries a `#rrggbb` from the theme code palette; a tag per color
+    /// is created on first sight and reused after. Spans must arrive in document
+    /// order, as with [`Editor::set_link_spans`].
+    pub fn set_code_spans(&self, spans: &[(Range<usize>, String)]) {
+        let (start, end) = self.buffer.bounds();
+        let mut tags = self.code_tags.borrow_mut();
+        for tag in tags.values() {
+            self.buffer.remove_tag(tag, &start, &end);
+        }
+
+        let text = self.buffer.text(&start, &end, true);
+        let mut lines = LineIndex::new(&text);
+        for (range, color) in spans {
+            let tag = tags.entry(color.clone()).or_insert_with(|| {
+                let tag = gtk::TextTag::builder().foreground(color).build();
+                self.buffer.tag_table().add(&tag);
+                tag
+            });
+            let (Some(from), Some(to)) = (lines.locate(range.start), lines.locate(range.end)) else {
+                continue;
+            };
+            let (Some(from), Some(to)) = (
+                self.buffer.iter_at_line_index(from.0, from.1),
+                self.buffer.iter_at_line_index(to.0, to.1),
+            ) else {
+                continue;
+            };
+            self.buffer.apply_tag(tag, &from, &to);
+        }
+        // Above the grammar's own block style, below the link tags.
+        let code_tags: Vec<_> = tags.values().cloned().collect();
+        raise_tags(&self.buffer.tag_table(), &code_tags);
+        raise_tags(
+            &self.buffer.tag_table(),
+            &[
+                self.inert_tag.clone(),
+                self.broken_link_tag.clone(),
+                self.link_tag.clone(),
+            ],
+        );
+    }
+
+    /// Drop the per-color code tags, so a theme switch starts from nothing
+    /// rather than keeping the old palette's colors alive in the table.
+    pub fn clear_code_tags(&self) {
+        let (start, end) = self.buffer.bounds();
+        for tag in self.code_tags.borrow_mut().drain().map(|(_, tag)| tag) {
+            self.buffer.remove_tag(&tag, &start, &end);
+            self.buffer.tag_table().remove(&tag);
+        }
     }
 
     /// Call `f` with the clicked byte offset in the buffer on a Ctrl+Click.

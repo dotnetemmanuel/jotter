@@ -649,6 +649,7 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     stop_git(state);
     refresh_backlinks(state);
     refresh_window_title(state);
+    refresh_editor_links(state);
 }
 
 /// The row key the vault picker uses for "somewhere else".
@@ -1337,6 +1338,21 @@ fn refresh_editor_links(state: &Rc<State>) {
     state
         .editor
         .set_link_spans(&spans, &jotter_parser::wikilink::scan_inert(&text));
+    refresh_code_colors(state, &text);
+}
+
+/// Re-colors the fenced code blocks in the editor from the active theme.
+///
+/// The preview gets the same colors from the same palette through comrak, so the
+/// two panes agree; this is the editor's half of that bargain.
+fn refresh_code_colors(state: &Rc<State>, text: &str) {
+    let code = state.theme.borrow().code.clone();
+    let spans: Vec<(std::ops::Range<usize>, String)> =
+        jotter_parser::codeblock::color_spans(text, &code)
+            .into_iter()
+            .map(|span| (span.range, span.color))
+            .collect();
+    state.editor.set_code_spans(&spans);
 }
 
 /// Rebuilds wikilink resolution from the index and re-resolves the links table.
@@ -3087,6 +3103,9 @@ fn set_appearance<F: Fn(&mut config::Appearance)>(state: &Rc<State>, change: F) 
 fn apply_theme(state: &Rc<State>, next: Theme) {
     apply_chrome_css(&state.chrome_provider, &next);
     state.editor.set_theme(&next);
+    // The code colors are per-palette tags, so the old palette's tags must go
+    // before the refresh below lays down the new one's.
+    state.editor.clear_code_tags();
     state.preview.set_theme(&next);
     state.search_panel.set_accent(&next.chrome.accent);
     state.tags_panel.set_accent(&next.chrome.accent);
@@ -3109,6 +3128,7 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
         let rendered = render_markdown(state, &text);
         state.preview.rerender_preserving_scroll(&rendered.html);
     }
+    refresh_editor_links(state);
 }
 
 /// Render the editor text with the active theme and the vault's link resolver.

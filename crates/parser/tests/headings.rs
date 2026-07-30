@@ -68,3 +68,22 @@ fn render_highlights_fenced_code_with_theme_background() {
         "expected themed code background in html"
     );
 }
+
+#[test]
+fn the_preview_colors_csharp_and_kotlin_blocks() {
+    // The stock syntect adapter knew neither token, so both fell back to plain
+    // text in the preview while the editor colored them.
+    let src = "```csharp\n// note\nvar x = 42;\n```\n\n```kotlin\n// note\nval y = 7\n```\n";
+    let rendered = render(src, &test_code(), &no_links);
+    let comments = rendered.html.matches("color:#6a9955").count();
+    assert_eq!(comments, 2, "one colored comment per block:\n{}", rendered.html);
+    assert!(rendered.html.contains("color:#b5cea8"), "numbers colored");
+}
+
+#[test]
+fn an_unknown_fence_language_renders_escaped_plain_text() {
+    let src = "```mermaid\ngraph TD; A-->B & \"q\"\n```\n";
+    let rendered = render(src, &test_code(), &no_links);
+    assert!(rendered.html.contains("A--&gt;B &amp; &quot;q&quot;"));
+    assert!(!rendered.html.contains("<span style"));
+}

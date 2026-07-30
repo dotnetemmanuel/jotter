@@ -3,6 +3,7 @@
 //! highlighting driven by the active theme, and a source-line to heading-anchor
 //! map for scroll synchronization between the editor and the preview.
 
+pub mod codeblock;
 pub mod frontmatter;
 pub mod tags;
 pub mod wikilink;
@@ -10,7 +11,7 @@ pub mod wikilink;
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Anchorizer, Arena, Options};
 use jotter_theming::Code;
-use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, Theme, ThemeItem, ThemeSet};
+use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, Theme, ThemeItem};
 
 pub use wikilink::Wikilink;
 
@@ -64,10 +65,7 @@ pub fn render(src: &str, code: &Code, resolver: &dyn wikilink::LinkResolver) -> 
 
     let headings = collect_headings(root);
 
-    let adapter = comrak::plugins::syntect::SyntectAdapterBuilder::new()
-        .theme_set(theme_set_from_code(code))
-        .theme(SYNTECT_THEME_NAME)
-        .build();
+    let adapter = CodeAdapter { theme: theme_from_code(code) };
     let mut plugins = comrak::options::Plugins::default();
     plugins.render.codefence_syntax_highlighter = Some(&adapter);
 
@@ -122,34 +120,121 @@ fn heading_plain_text<'a>(node: &'a AstNode<'a>) -> String {
     out
 }
 
-/// The name our custom syntect theme is registered under in its theme set.
-const SYNTECT_THEME_NAME: &str = "jotter";
+/// The comrak highlighter for the preview, sharing the editor's syntax lookup.
+///
+/// The stock syntect adapter matches fence tokens only the way syntect spells
+/// them, so `csharp` and `kotlin` fell back to plain text in the preview while
+/// the editor colored them. One [`codeblock::lookup`] for both panes means a
+/// block is either colored in both or flat in both.
+struct CodeAdapter {
+    /// The palette-derived theme, the same one [`codeblock::color_spans`] uses.
+    theme: Theme,
+}
 
-/// Build a one-theme syntect [`ThemeSet`] from the jotter code palette.
-fn theme_set_from_code(code: &Code) -> ThemeSet {
-    let mut set = ThemeSet::default();
-    set.themes
-        .insert(SYNTECT_THEME_NAME.to_string(), theme_from_code(code));
-    set
+impl comrak::adapters::SyntaxHighlighterAdapter for CodeAdapter {
+    fn write_highlighted(
+        &self,
+        output: &mut dyn std::fmt::Write,
+        lang: Option<&str>,
+        code: &str,
+    ) -> std::fmt::Result {
+        let syntax = lang
+            .filter(|lang| !lang.is_empty())
+            .map(|lang| lang.split([' ', '\t', ',']).next().unwrap_or(lang))
+            .and_then(|lang| codeblock::lookup(&lang.to_lowercase()));
+        let Some(syntax) = syntax else {
+            return write!(output, "{}", escape_html(code));
+        };
+
+        let mut lines = syntect::easy::HighlightLines::new(syntax, &self.theme);
+        for line in code.split_inclusive('\n') {
+            let Ok(styled) = lines.highlight_line(line, codeblock::syntaxes()) else {
+                write!(output, "{}", escape_html(line))?;
+                continue;
+            };
+            let html = syntect::html::styled_line_to_highlighted_html(
+                &styled,
+                syntect::html::IncludeBackground::No,
+            )
+            .map_err(|_| std::fmt::Error)?;
+            output.write_str(&html)?;
+        }
+        Ok(())
+    }
+
+    fn write_pre_tag(
+        &self,
+        output: &mut dyn std::fmt::Write,
+        attributes: std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+    ) -> std::fmt::Result {
+        let background = self.theme.settings.background.unwrap_or(FALLBACK_COLOR);
+        write!(
+            output,
+            "<pre style=\"background-color:#{:02x}{:02x}{:02x};\"",
+            background.r, background.g, background.b
+        )?;
+        write_attributes(output, &attributes)?;
+        output.write_str(">")
+    }
+
+    fn write_code_tag(
+        &self,
+        output: &mut dyn std::fmt::Write,
+        attributes: std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+    ) -> std::fmt::Result {
+        output.write_str("<code")?;
+        write_attributes(output, &attributes)?;
+        output.write_str(">")
+    }
+}
+
+/// Write comrak's tag attributes, values escaped.
+fn write_attributes(
+    output: &mut dyn std::fmt::Write,
+    attributes: &std::collections::HashMap<&'static str, std::borrow::Cow<'_, str>>,
+) -> std::fmt::Result {
+    for (name, value) in attributes {
+        write!(output, " {name}=\"{}\"", escape_html(value))?;
+    }
+    Ok(())
+}
+
+/// Escape text for HTML body or attribute position.
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Build a syntect [`Theme`] from the jotter code palette, mapping scopes to
 /// palette colors. Malformed hex falls back to a neutral default.
-fn theme_from_code(code: &Code) -> Theme {
-    let mut theme = Theme {
-        name: Some(SYNTECT_THEME_NAME.to_string()),
-        ..Theme::default()
-    };
+pub(crate) fn theme_from_code(code: &Code) -> Theme {
+    let mut theme = Theme { name: Some("jotter".to_string()), ..Theme::default() };
     theme.settings.background = Some(parse_hex(&code.background));
     theme.settings.foreground = Some(parse_hex(&code.foreground));
 
+    // A deeper selector outscores a shallower one, so `variable.function` takes
+    // calls away from the plain `variable` rule, and `keyword.operator` quiets
+    // `=` and `+` back to the foreground: an operator on every line is noise,
+    // and the color reads better spent on calls and types.
     let mappings = [
         ("keyword", code.keyword.as_str()),
+        ("keyword.operator", code.foreground.as_str()),
+        ("storage.modifier", code.keyword.as_str()),
         ("string", code.string.as_str()),
+        ("constant.character.escape", code.number.as_str()),
         ("comment", code.comment.as_str()),
-        ("entity.name.function", code.function.as_str()),
-        ("constant.numeric", code.number.as_str()),
-        ("entity.name.type, storage.type", code.type_name.as_str()),
+        ("entity.name.function, variable.function, support.function", code.function.as_str()),
+        ("constant.numeric, constant.language", code.number.as_str()),
+        (
+            "entity.name.type, entity.name.class, storage.type, support.type, support.class",
+            code.type_name.as_str(),
+        ),
+        (
+            "variable.annotation, entity.other.attribute-name, entity.other.inherited-class",
+            code.type_name.as_str(),
+        ),
         ("variable", code.variable.as_str()),
     ];
 
