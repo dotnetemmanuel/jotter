@@ -20,7 +20,7 @@ impl Theme {
         format!(
             "/* {name} */\n\
 window {{\n  background-color: {bg};\n  color: {text};\n  font-family: {ui_font};\n  font-size: {size}px;\n}}\n\n\
-headerbar {{\n  background-color: {bg};\n  background-image: none;\n  color: {text};\n  border-bottom: 1px solid {overlay};\n  box-shadow: none;\n}}\n\n\
+headerbar {{\n  background-color: {bg};\n  background-image: none;\n  color: {text};\n  border-bottom: 1px solid {overlay};\n  box-shadow: none;\n  padding-left: 0;\n}}\n\n\
 separator {{\n  background-color: {overlay};\n  min-height: 1px;\n  min-width: 1px;\n}}\n\n\
 paned > separator {{\n  background-color: {overlay};\n  background-image: none;\n  min-width: 1px;\n  min-height: 1px;\n}}\n\n\
 .sidebar {{\n  background-color: {bg};\n}}\n\n\

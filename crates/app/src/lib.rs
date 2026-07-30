@@ -339,7 +339,7 @@ const LOGO_SVG: &str = include_str!("../../../resources/icons/jotter-symbolic.sv
 /// The headerbar logo, stamped in `color`.
 fn logo_image(color: &str) -> gtk::Image {
     let image = gtk::Image::new();
-    image.set_pixel_size(24);
+    image.set_pixel_size(32);
     stamp_logo(&image, color);
     image
 }
@@ -351,7 +351,7 @@ fn stamp_logo(image: &gtk::Image, color: &str) {
     let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("svg").ok();
     let pixbuf = loader.and_then(|loader| {
         // Rendered at twice the display size so a scaled monitor stays crisp.
-        loader.set_size(48, 48);
+        loader.set_size(64, 64);
         loader.write(svg.as_bytes()).ok()?;
         loader.close().ok()?;
         loader.pixbuf()
@@ -616,6 +616,13 @@ fn present_window(app: &Application, state: &Rc<State>) {
         .child(&state.overlay)
         .build();
     let bar = HeaderBar::new();
+    // The otter sits centered over the rail below it. A size group gives the
+    // image the rail's width (no expand: a group sets minimums, and an expanding
+    // child would grow past it), and an Image centers its paintable in whatever
+    // allocation it gets.
+    let width = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
+    width.add_widget(&state.logo);
+    width.add_widget(&state.rail.widget());
     bar.pack_start(&state.logo);
     window.set_titlebar(Some(&bar));
 

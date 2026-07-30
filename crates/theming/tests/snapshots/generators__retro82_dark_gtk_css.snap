@@ -16,6 +16,7 @@ headerbar {
   color: #f6dcac;
   border-bottom: 1px solid #134e5a;
   box-shadow: none;
+  padding-left: 0;
 }
 
 separator {
