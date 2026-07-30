@@ -1,4 +1,4 @@
-# Epic 2 — planning, tasks and focus
+# Epic 2: planning, tasks and focus
 
 Design agreed 2026-07-30. jotter grows a second half: a personal planner with
 task tracking, a timer, and a focus mode, living beside the markdown vault rather
@@ -186,7 +186,7 @@ single-pane: you are either writing or planning. `Ctrl+B` still collapses only t
 tree.
 
 A running task normally appears as a **slim strip** near the status bar, so the
-editor stays usable — in jotter, working often *means* writing, which is why the
+editor stays usable. In jotter, working often *means* writing, which is why the
 Blitzit-style screen takeover is not the default. A **full focus view** is
 available on demand for work that is not writing.
 
@@ -196,7 +196,7 @@ rather than data.
 
 ## Structure
 
-**`crates/tasks`** — pure Rust: SQLite and the domain rules, no GTK. Mirrors
+**`crates/tasks`** holds pure Rust: SQLite and the domain rules, no GTK. Mirrors
 `crates/index` with a `Store` type, `thiserror` errors, and migrations as numbered
 `.sql` files. All the error-prone logic lives here and is tested without a display.
 
@@ -224,8 +224,8 @@ committed.
 4. Task notes with wikilinks and the cross-vault switch.
 5. Reports.
 
-Stage 1 has four fairly independent pieces — schema and store, date logic, planner
-views, timer — so those parallelise across agents. Later stages converge on the
+Stage 1 has four fairly independent pieces (schema and store, date logic, planner
+views, timer), so those parallelise across agents. Later stages converge on the
 planner UI and are better done in sequence.
 
 ## Testing
