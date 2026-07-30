@@ -27,7 +27,7 @@ fn test_code() -> Code {
 
 #[test]
 fn headings_map_source_lines_levels_and_anchors() {
-    let rendered = render(FIXTURE, &test_code(), &no_links);
+    let rendered = render(FIXTURE, &test_code(), &no_links, &jotter_parser::NoImages);
 
     let headings = &rendered.headings;
     assert_eq!(headings.len(), 3, "three headings expected");
@@ -61,7 +61,7 @@ fn headings_map_source_lines_levels_and_anchors() {
 
 #[test]
 fn render_highlights_fenced_code_with_theme_background() {
-    let rendered = render(FIXTURE, &test_code(), &no_links);
+    let rendered = render(FIXTURE, &test_code(), &no_links, &jotter_parser::NoImages);
     // The custom syntect theme background should appear on the code block.
     assert!(
         rendered.html.contains("background-color:#1e1e1e"),
@@ -74,7 +74,7 @@ fn the_preview_colors_csharp_and_kotlin_blocks() {
     // The stock syntect adapter knew neither token, so both fell back to plain
     // text in the preview while the editor colored them.
     let src = "```csharp\n// note\nvar x = 42;\n```\n\n```kotlin\n// note\nval y = 7\n```\n";
-    let rendered = render(src, &test_code(), &no_links);
+    let rendered = render(src, &test_code(), &no_links, &jotter_parser::NoImages);
     let comments = rendered.html.matches("color:#6a9955").count();
     assert_eq!(comments, 2, "one colored comment per block:\n{}", rendered.html);
     assert!(rendered.html.contains("color:#b5cea8"), "numbers colored");
@@ -83,7 +83,7 @@ fn the_preview_colors_csharp_and_kotlin_blocks() {
 #[test]
 fn an_unknown_fence_language_renders_escaped_plain_text() {
     let src = "```mermaid\ngraph TD; A-->B & \"q\"\n```\n";
-    let rendered = render(src, &test_code(), &no_links);
+    let rendered = render(src, &test_code(), &no_links, &jotter_parser::NoImages);
     assert!(rendered.html.contains("A--&gt;B &amp; &quot;q&quot;"));
     assert!(!rendered.html.contains("<span style"));
 }

@@ -14,6 +14,7 @@ mod drill;
 mod fonts;
 mod git_panel;
 mod git_status;
+mod images;
 mod keysheet;
 mod links;
 mod moves;
@@ -143,6 +144,8 @@ struct VaultSession {
     resolver: RefCell<Resolver>,
     /// Note path to display title, so tree rows need no query per bind.
     titles: RefCell<HashMap<String, String>>,
+    /// Image filename to where it was found, so a vault is walked once per name.
+    image_paths: RefCell<HashMap<String, PathBuf>>,
     /// Whether this vault is its own git repository. Absent means no git at all.
     is_git: bool,
 }
@@ -866,6 +869,7 @@ fn open_vault_now(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         current: RefCell::new(None),
         resolver: RefCell::new(Resolver::default()),
         titles: RefCell::new(HashMap::new()),
+        image_paths: RefCell::new(HashMap::new()),
         is_git: jotter_git::Repo::discover(root).is_some(),
     }));
 
@@ -3185,10 +3189,55 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
 /// Single-file mode has no vault, so every wikilink there renders as broken.
 fn render_markdown(state: &Rc<State>, text: &str) -> jotter_parser::Rendered {
     let code = &state.theme.borrow().code;
-    match state.session.borrow().as_ref() {
-        Some(session) => jotter_parser::render(text, code, &*session.resolver.borrow()),
-        None => jotter_parser::render(text, code, &Resolver::default()),
+    let base = note_folder(state);
+    let session = state.session.borrow();
+    let seen = RefCell::new(HashMap::new());
+    let (cache, vault) = match session.as_ref() {
+        Some(session) => (&session.image_paths, Some(session.vault.root())),
+        None => (&seen, None),
+    };
+    // The parser needs Option<PathBuf> per lookup; the session keeps found paths.
+    let found: RefCell<HashMap<String, Option<PathBuf>>> = RefCell::new(
+        cache
+            .borrow()
+            .iter()
+            .map(|(name, path)| (name.clone(), Some(path.clone())))
+            .collect(),
+    );
+    let locator = images::Locator::new(base, vault, &found);
+    let rendered = match session.as_ref() {
+        Some(session) => {
+            jotter_parser::render(text, code, &*session.resolver.borrow(), &locator)
+        }
+        None => jotter_parser::render(text, code, &Resolver::default(), &locator),
+    };
+    for (name, path) in found.into_inner() {
+        if let Some(path) = path {
+            cache.borrow_mut().insert(name, path);
+        }
     }
+    rendered
+}
+
+/// The folder holding the open note, which relative image paths are written
+/// against. `None` when nothing is open, leaving such paths as they are.
+fn note_folder(state: &Rc<State>) -> Option<PathBuf> {
+    if let Some(session) = state.session.borrow().as_ref() {
+        let current = session.current.borrow();
+        if let Some(rel) = current.as_ref() {
+            return session
+                .vault
+                .root()
+                .join(rel)
+                .parent()
+                .map(Path::to_path_buf);
+        }
+    }
+    state
+        .single_file
+        .borrow()
+        .as_ref()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
 }
 
 /// Parse the editor buffer, load it into the preview, and scroll to the heading
@@ -3622,9 +3671,13 @@ fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
     let drain_state = Rc::clone(state);
     gtk::glib::timeout_add_local(Duration::from_millis(DRAIN_MS), move || {
         let mut structural = false;
+        let mut touched_current = false;
         loop {
             match rx.try_recv() {
                 Ok(change) => {
+                    if changed_the_open_note(&drain_state, &change) {
+                        touched_current = true;
+                    }
                     if apply_change(&drain_state, &change) {
                         structural = true;
                     }
@@ -3642,8 +3695,53 @@ fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
             // An external edit can rename the note without moving its file.
             refresh_titles(&drain_state);
         }
+        if touched_current {
+            reload_externally_changed(&drain_state);
+        }
         gtk::glib::ControlFlow::Continue
     });
+}
+
+/// Whether `change` is an edit to the note currently in the editor.
+///
+/// A rename counts by its destination: the file the editor is showing is the one
+/// that now holds the new text.
+fn changed_the_open_note(state: &Rc<State>, change: &VaultChange) -> bool {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return false;
+    };
+    let current = session.current.borrow();
+    let Some(current) = current.as_ref() else {
+        return false;
+    };
+    let touched = match change {
+        VaultChange::Created(rel) | VaultChange::Modified(rel) => rel,
+        VaultChange::Renamed { to, .. } => to,
+        // A removal leaves nothing to reload; the buffer keeps what it has.
+        VaultChange::Removed(_) => return false,
+    };
+    touched == current
+}
+
+/// Rereads the open note after something outside jotter changed it.
+///
+/// Unsaved edits win: reloading would throw them away, so a dirty buffer is left
+/// alone and says so, which is the only honest option without a merge.
+fn reload_externally_changed(state: &Rc<State>) {
+    if state.dirty.get() {
+        say(state, "Changed on disk. Your unsaved edits are kept (Ctrl+S to overwrite)");
+        return;
+    }
+    let caret = state.editor.caret_line();
+    let scrolled = state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW);
+    reload_current_note(state);
+    // load_note puts the caret at the top, but an external edit is not a reason
+    // to lose your place in a note you were reading.
+    state.editor.set_caret_line(caret);
+    if scrolled {
+        render_into_preview(state);
+    }
 }
 
 /// Applies one watcher change to the index. Returns true if the tree structure
@@ -3710,6 +3808,9 @@ fn tree_menu(kind: Option<Kind>) -> gio::Menu {
     let Some(kind) = kind else {
         return menu;
     };
+    // Any row has a path, including the dimmed ones jotter cannot open, so this
+    // sits above the operations that only apply to notes and folders.
+    menu.append(Some("Copy path"), Some("app.tree-copy-path"));
     let (rename, delete) = match kind {
         Kind::Note => ("Rename note", "Delete note to trash"),
         Kind::Folder => ("Rename folder", "Delete folder to trash"),
@@ -3786,6 +3887,23 @@ fn row_widget_at(list_view: &ListView, x: f64, y: f64) -> Option<gtk::Widget> {
     }
 }
 
+/// Puts the absolute path of the vault-relative `rel` on the clipboard.
+fn copy_row_path(state: &Rc<State>, rel: &Path) {
+    let absolute = state
+        .session
+        .borrow()
+        .as_ref()
+        .map(|session| session.vault.root().join(rel));
+    let Some(absolute) = absolute else {
+        return;
+    };
+    let text = absolute.to_string_lossy().into_owned();
+    if let Some(display) = gdk::Display::default() {
+        display.clipboard().set_text(&text);
+    }
+    say(state, &format!("Copied {text}"));
+}
+
 /// The vault-relative directory new items land in for a right-clicked `target`.
 ///
 /// A folder target is that folder; a file target is its parent; `None` (empty
@@ -3811,6 +3929,19 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
     let Some(app) = gio::Application::default().and_downcast::<Application>() else {
         return;
     };
+
+    // Copy path: the absolute path of whatever was right-clicked, whether or not
+    // jotter can open it, so a PDF beside a note is as reachable as the note.
+    let copy_path = gio::SimpleAction::new("tree-copy-path", None);
+    let s = Rc::clone(state);
+    let t = Rc::clone(target);
+    copy_path.connect_activate(move |_, _| {
+        let Some(rel) = t.borrow().clone() else {
+            return;
+        };
+        copy_row_path(&s, &rel);
+    });
+    app.add_action(&copy_path);
 
     // New note: prompt for a name and create it under the target directory.
     let new_note = gio::SimpleAction::new("tree-new-note", None);

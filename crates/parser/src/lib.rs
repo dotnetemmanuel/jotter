@@ -8,12 +8,42 @@ pub mod frontmatter;
 pub mod tags;
 pub mod wikilink;
 
+use std::fmt::Write as _;
+
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{Anchorizer, Arena, Options};
 use jotter_theming::Code;
 use syntect::highlighting::{Color, ScopeSelectors, StyleModifier, Theme, ThemeItem};
 
 pub use wikilink::Wikilink;
+
+/// Finds where an image `src` written in a note actually lives on disk.
+///
+/// The parser never touches the filesystem, exactly as wikilink resolution is
+/// left to a [`wikilink::LinkResolver`]. `None` leaves the src as written.
+pub trait ImageLocator {
+    /// Absolute path for `src`, or `None` to leave it alone.
+    fn locate(&self, src: &str) -> Option<std::path::PathBuf>;
+}
+
+/// An [`ImageLocator`] that resolves against one folder and looks no further,
+/// which is all a single opened file can do.
+pub struct RelativeTo(pub std::path::PathBuf);
+
+impl ImageLocator for RelativeTo {
+    fn locate(&self, src: &str) -> Option<std::path::PathBuf> {
+        Some(self.0.join(src))
+    }
+}
+
+/// An [`ImageLocator`] that finds nothing, for rendering with no note behind it.
+pub struct NoImages;
+
+impl ImageLocator for NoImages {
+    fn locate(&self, _: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+}
 
 /// A rendered document: HTML plus a source-line to heading-anchor map.
 pub struct Rendered {
@@ -57,11 +87,18 @@ fn base_options() -> Options<'static> {
 /// Wikilinks are rewritten to links through `resolver` first, then fenced code
 /// blocks are highlighted with a syntect theme derived from `code`.
 #[must_use]
-pub fn render(src: &str, code: &Code, resolver: &dyn wikilink::LinkResolver) -> Rendered {
+pub fn render(
+    src: &str,
+    code: &Code,
+    resolver: &dyn wikilink::LinkResolver,
+    images: &dyn ImageLocator,
+) -> Rendered {
     let src = wikilink::rewrite(src, resolver);
     let options = base_options();
     let arena = Arena::new();
     let root = comrak::parse_document(&arena, &src, &options);
+
+    absolutize_images(root, images);
 
     let headings = collect_headings(root);
 
@@ -81,6 +118,133 @@ pub fn render(src: &str, code: &Code, resolver: &dyn wikilink::LinkResolver) -> 
 pub fn markdown_to_html(src: &str) -> String {
     let options = base_options();
     comrak::markdown_to_html(src, &options)
+}
+
+/// Rewrite relative image sources to absolute `file://` URIs against `dir`.
+///
+/// The preview loads each render from a file in the cache directory, so a
+/// relative `src` would otherwise resolve against that directory rather than the
+/// note. Only the in-memory document is touched: the note on disk keeps the
+/// relative path it was written with, so other editors still read it.
+fn absolutize_images<'a>(root: &'a AstNode<'a>, images: &dyn ImageLocator) {
+    for node in root.descendants() {
+        let mut data = node.data.borrow_mut();
+        match &mut data.value {
+            NodeValue::Image(image) => {
+                if let Some(absolute) = absolute_file_uri(&image.url, images) {
+                    image.url = absolute;
+                }
+            }
+            // An <img> written by hand carries its src in raw HTML, which the AST
+            // keeps as one opaque literal, so the attribute is rewritten in place.
+            NodeValue::HtmlBlock(block) => {
+                if let Some(rewritten) = rewrite_html_srcs(&block.literal, images) {
+                    block.literal = rewritten;
+                }
+            }
+            NodeValue::HtmlInline(literal) => {
+                if let Some(rewritten) = rewrite_html_srcs(literal, images) {
+                    *literal = rewritten;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rewrite every relative `src` attribute in a raw HTML literal, or `None` when
+/// nothing needed changing.
+///
+/// Deliberately a scan for one attribute rather than HTML parsing: the literal is
+/// whatever the author typed, and only `src` decides where an image loads from.
+fn rewrite_html_srcs(html: &str, images: &dyn ImageLocator) -> Option<String> {
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    let mut changed = false;
+
+    for (at, _) in html.match_indices("src") {
+        if at < cursor {
+            continue;
+        }
+        // Must be its own attribute: preceded by space, and not srcset or data-src.
+        let before_ok = at > 0 && bytes[at - 1].is_ascii_whitespace();
+        let after = bytes.get(at + 3).copied();
+        if !before_ok || after.is_none_or(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            continue;
+        }
+        let mut i = at + 3;
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'=') {
+            continue;
+        }
+        i += 1;
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        let (value, start, end) = match bytes.get(i) {
+            Some(&quote @ (b'"' | b'\'')) => {
+                let from = i + 1;
+                let to = html[from..].find(quote as char)? + from;
+                (&html[from..to], from, to)
+            }
+            Some(_) => {
+                let from = i;
+                let to = html[from..]
+                    .find(|c: char| c.is_whitespace() || c == '>')
+                    .map_or(html.len(), |n| n + from);
+                (&html[from..to], from, to)
+            }
+            None => continue,
+        };
+        let Some(absolute) = absolute_file_uri(value, images) else {
+            continue;
+        };
+        out.push_str(&html[cursor..start]);
+        out.push_str(&absolute);
+        cursor = end;
+        changed = true;
+    }
+    if !changed {
+        return None;
+    }
+    out.push_str(&html[cursor..]);
+    Some(out)
+}
+
+/// `dir`-relative `url` as a `file://` URI, or `None` to leave it alone.
+///
+/// Anything already carrying a scheme is left as written, which keeps remote
+/// images and `data:` URIs working.
+fn absolute_file_uri(url: &str, images: &dyn ImageLocator) -> Option<String> {
+    if url.is_empty() || url.starts_with('#') || has_scheme(url) {
+        return None;
+    }
+    let joined = images.locate(url)?;
+    let mut uri = String::from("file://");
+    for byte in joined.to_string_lossy().bytes() {
+        match byte {
+            b'/' | b'-' | b'_' | b'.' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => {
+                uri.push(byte as char);
+            }
+            other => {
+                // Infallible: writing to a String never fails.
+                let _ = write!(uri, "%{other:02X}");
+            }
+        }
+    }
+    Some(uri)
+}
+
+/// Whether `url` begins with a URI scheme such as `https:` or `data:`.
+fn has_scheme(url: &str) -> bool {
+    let scheme: String = url
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        .collect();
+    !scheme.is_empty() && url[scheme.len()..].starts_with(':')
 }
 
 /// Walk the AST in document order and collect one entry per heading. The slug
@@ -280,5 +444,114 @@ fn parse_hex(hex: &str) -> Color {
     match (component(0..2), component(2..4), component(4..6)) {
         (Some(r), Some(g), Some(b)) => Color { r, g, b, a: 0xff },
         _ => FALLBACK_COLOR,
+    }
+}
+
+#[cfg(test)]
+mod image_paths {
+    use super::absolute_file_uri;
+    use std::path::Path;
+
+    fn at(url: &str) -> Option<String> {
+        absolute_file_uri(url, &super::RelativeTo(Path::new("/vault/notes").to_path_buf()))
+    }
+
+    #[test]
+    fn a_same_folder_image_becomes_absolute() {
+        assert_eq!(at("beside.jpg").as_deref(), Some("file:///vault/notes/beside.jpg"));
+    }
+
+    #[test]
+    fn a_subfolder_image_keeps_its_subfolder() {
+        assert_eq!(at("pics/otter.jpg").as_deref(), Some("file:///vault/notes/pics/otter.jpg"));
+    }
+
+    #[test]
+    fn a_parent_relative_image_resolves_upward() {
+        assert_eq!(at("../top.png").as_deref(), Some("file:///vault/notes/../top.png"));
+    }
+
+    #[test]
+    fn an_absolute_path_replaces_the_base() {
+        assert_eq!(at("/srv/shared/x.png").as_deref(), Some("file:///srv/shared/x.png"));
+    }
+
+    #[test]
+    fn remote_and_data_urls_are_left_alone() {
+        for url in ["https://example.com/a.png", "http://x/a.png", "data:image/png;base64,AAA"] {
+            assert_eq!(at(url), None, "{url} should be untouched");
+        }
+    }
+
+    #[test]
+    fn spaces_and_specials_are_percent_encoded() {
+        assert_eq!(at("my pic.jpg").as_deref(), Some("file:///vault/notes/my%20pic.jpg"));
+        assert_eq!(at("caf\u{e9}.png").as_deref(), Some("file:///vault/notes/caf%C3%A9.png"));
+    }
+
+    #[test]
+    fn an_anchor_or_empty_url_is_left_alone() {
+        assert_eq!(at("#section"), None);
+        assert_eq!(at(""), None);
+    }
+
+    #[test]
+    fn a_windows_style_drive_is_treated_as_a_scheme_not_a_path() {
+        // Guard on has_scheme: a single letter followed by a colon reads as a
+        // scheme, so it is left alone rather than mangled into a file URI.
+        assert_eq!(at("c:/pics/x.png"), None);
+    }
+}
+
+#[cfg(test)]
+mod html_image_paths {
+    use super::rewrite_html_srcs;
+    use std::path::Path;
+
+    fn at(html: &str) -> Option<String> {
+        rewrite_html_srcs(html, &super::RelativeTo(Path::new("/vault/CV").to_path_buf()))
+    }
+
+    #[test]
+    fn a_hand_written_img_gets_an_absolute_src() {
+        // The shape a CV actually uses: inside a table, self-closing, with attributes.
+        let html = "<td><img src=\"profile.jpg\" width=\"100\" /></td>";
+        assert_eq!(
+            at(html).as_deref(),
+            Some("<td><img src=\"file:///vault/CV/profile.jpg\" width=\"100\" /></td>")
+        );
+    }
+
+    #[test]
+    fn single_quoted_and_unquoted_srcs_work() {
+        assert!(at("<img src='a.png'>").unwrap().contains("file:///vault/CV/a.png"));
+        assert!(at("<img src=a.png>").unwrap().contains("file:///vault/CV/a.png"));
+    }
+
+    #[test]
+    fn several_images_in_one_block_are_all_rewritten() {
+        let out = at("<img src=\"github.png\"><img src=\"linkedin.png\">").unwrap();
+        assert!(out.contains("file:///vault/CV/github.png"));
+        assert!(out.contains("file:///vault/CV/linkedin.png"));
+    }
+
+    #[test]
+    fn remote_srcs_and_unrelated_attributes_are_left_alone() {
+        assert_eq!(at("<img src=\"https://x/a.png\">"), None);
+        // srcset and data-src must not be mistaken for src.
+        assert_eq!(at("<img srcset=\"a.png 1x\">"), None);
+        assert_eq!(at("<img data-src=\"a.png\">"), None);
+    }
+
+    #[test]
+    fn html_with_no_src_is_untouched() {
+        assert_eq!(at("<div style=\"color: black\">hi</div>"), None);
+    }
+
+    #[test]
+    fn other_attributes_survive_around_the_rewrite() {
+        let out = at("<img alt=\"me\" src=\"a.png\" style=\"width:1px\">").unwrap();
+        assert!(out.contains("alt=\"me\""), "{out}");
+        assert!(out.contains("style=\"width:1px\""), "{out}");
     }
 }
