@@ -33,6 +33,9 @@ pub struct Preview {
     /// zoom exists to render crisply on a scaled display, not to make the
     /// preview's text bigger than the editor's.
     zoom: RefCell<f64>,
+    /// The theme's own CSS, kept apart from the zoom correction so recomposing
+    /// replaces that correction instead of stacking another one on top.
+    theme_css: RefCell<String>,
     /// Path of the temp file the current render was written to; shared with the
     /// load-finished handler so it can scroll the loaded page to the anchor.
     base_path: Rc<RefCell<Option<PathBuf>>>,
@@ -83,6 +86,7 @@ impl Preview {
             view,
             css: RefCell::new(theme.to_preview_css()),
             zoom: RefCell::new(1.0),
+            theme_css: RefCell::new(theme.to_preview_css()),
             base_path,
             pending_anchor,
             counter: RefCell::new(0),
@@ -119,7 +123,7 @@ impl Preview {
     /// Swap the theme CSS (for example after a light/dark switch). The change is
     /// applied on the next `render`; the caller re-renders if the preview shows.
     pub fn set_theme(&self, theme: &jotter_theming::Theme) {
-        *self.css.borrow_mut() = theme.to_preview_css();
+        *self.theme_css.borrow_mut() = theme.to_preview_css();
         self.rescale_body();
     }
 
@@ -178,10 +182,15 @@ impl Preview {
 
     /// Set the zoom level proportional to the monitor scale factor to avoid blurry
     /// text under Wayland fractional scaling.
-    pub fn set_zoom(&self, zoom: f64) {
+    /// Returns whether this differs from the zoom already in use, so a caller can
+    /// repaint: a page rendered before the real scale was known carries the
+    /// uncorrected size until something redraws it.
+    pub fn set_zoom(&self, zoom: f64) -> bool {
+        let changed = (*self.zoom.borrow() - zoom).abs() > 0.001;
         self.zoom.replace(zoom);
         self.view.set_zoom_level(zoom);
         self.rescale_body();
+        changed
     }
 
     /// Appends a body rule that divides the zoom back out of the base size.
@@ -192,18 +201,21 @@ impl Preview {
     /// size and should look it. Headings keep their `em` multiples, so they
     /// still scale from the body rather than from a fixed number.
     fn rescale_body(&self) {
-        let zoom = *self.zoom.borrow();
-        if zoom <= 0.0 {
-            return;
-        }
-        let css = self.css.borrow().clone();
-        let Some(base) = base_font_size(&css) else {
-            return;
-        };
-        let corrected = f64::from(base) / zoom;
-        let rule = format!("\nbody {{ font-size: {corrected:.3}px; }}\n");
-        self.css.borrow_mut().push_str(&rule);
+        *self.css.borrow_mut() = compose_css(&self.theme_css.borrow(), *self.zoom.borrow());
     }
+}
+
+/// The theme CSS with the zoom divided back out of the body size.
+///
+/// Composed from the theme each time rather than appended to what is already
+/// there: appending left one stale rule per zoom change in the document, and the
+/// last one to land is not necessarily the one matching the current zoom.
+fn compose_css(theme_css: &str, zoom: f64) -> String {
+    let Some(base) = base_font_size(theme_css).filter(|_| zoom > 0.0) else {
+        return theme_css.to_owned();
+    };
+    let corrected = f64::from(base) / zoom;
+    format!("{theme_css}\nbody {{ font-size: {corrected:.3}px; }}\n")
 }
 
 /// The `body` font size the theme's preview CSS asks for, in pixels.
@@ -316,5 +328,50 @@ mod tests {
     fn js_string_literal_escapes_quotes_and_backslashes() {
         assert_eq!(js_string_literal("a\"b\\c"), "\"a\\\"b\\\\c\"");
         assert_eq!(js_string_literal("plain"), "\"plain\"");
+    }
+}
+
+#[cfg(test)]
+mod zoom_correction {
+    use super::compose_css;
+
+    const THEME: &str = "body {\n  margin: 0;\n  font-size: 15px;\n}\n\nh1 { font-size: 2.4em; }\n";
+
+    #[test]
+    fn the_body_size_divides_the_zoom_back_out() {
+        let css = compose_css(THEME, 1.25);
+        assert!(css.contains("body { font-size: 12.000px; }"));
+    }
+
+    /// The correction the browser actually applies: the last body rule wins.
+    fn effective(css: &str) -> f64 {
+        let rule = css.rmatch_indices("body { font-size:").next().expect("a correction");
+        let rest = &css[rule.0 + rule.1.len()..];
+        rest[..rest.find("px").expect("px")].trim().parse().expect("a number")
+    }
+
+    #[test]
+    fn each_zoom_leaves_exactly_one_correction() {
+        // Every zoom change used to append, leaving one stale rule per change.
+        for zoom in [1.0, 1.25, 2.0] {
+            let css = compose_css(THEME, zoom);
+            assert_eq!(css.matches("body { font-size:").count(), 1, "zoom {zoom}");
+        }
+    }
+
+    #[test]
+    fn the_correction_always_matches_the_current_zoom() {
+        for zoom in [1.0, 1.2, 1.25, 1.5, 2.0] {
+            let css = compose_css(THEME, zoom);
+            // What the reader sees: the corrected size scaled back up by the zoom.
+            let rendered = effective(&css) * zoom;
+            assert!((rendered - 15.0).abs() < 0.01, "zoom {zoom} rendered {rendered}");
+        }
+    }
+
+    #[test]
+    fn a_nonsense_zoom_leaves_the_theme_alone() {
+        assert_eq!(compose_css(THEME, 0.0), THEME);
+        assert_eq!(compose_css("p { color: red; }", 1.25), "p { color: red; }");
     }
 }

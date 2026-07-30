@@ -339,7 +339,7 @@ const LOGO_SVG: &str = include_str!("../../../resources/icons/jotter-symbolic.sv
 /// The headerbar logo, stamped in `color`.
 fn logo_image(color: &str) -> gtk::Image {
     let image = gtk::Image::new();
-    image.set_pixel_size(40);
+    image.set_pixel_size(36);
     stamp_logo(&image, color);
     image
 }
@@ -400,7 +400,9 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     stack.set_transition_duration(80);
     stack.add_named(&editor.widget(), Some(PAGE_EDIT));
     stack.add_named(&preview.widget(), Some(PAGE_PREVIEW));
-    stack.set_visible_child_name(PAGE_EDIT);
+    // The mode jotter was left in, so closing in preview reopens in preview.
+    // Set before any note loads: the load path renders the preview when it shows.
+    stack.set_visible_child_name(if config.preview_mode { PAGE_PREVIEW } else { PAGE_EDIT });
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
@@ -683,6 +685,10 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     refresh_backlinks(state);
     refresh_window_title(state);
     refresh_editor_links(state);
+    // As in load_note: a preview already on screen would otherwise stay stale.
+    if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+        render_into_preview(state);
+    }
 }
 
 /// The row key the vault picker uses for "somewhere else".
@@ -892,6 +898,9 @@ fn open_vault_now(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         .or_else(|| first_note(state));
     if let Some(rel) = to_open {
         load_note(state, &rel);
+        // The tree starts with focus parked on its first row, so the highlight
+        // has to be walked to the note that actually opened.
+        select_in_tree(state, &rel);
     } else {
         state.editor.set_initial_text(SAMPLE_MARKDOWN);
     }
@@ -1793,8 +1802,14 @@ fn wire_preview_zoom(window: &ApplicationWindow, state: &Rc<State>) {
         let scale = window
             .surface()
             .map_or_else(|| f64::from(window.scale_factor()), |s| s.scale());
-        if scale > 0.0 {
-            zoom_state.preview.set_zoom(scale);
+        // The first render happens before the window is realized, so it used the
+        // uncorrected size. Repaint once the real scale is known, or the preview
+        // keeps that wrong size until something else redraws it.
+        if scale > 0.0
+            && zoom_state.preview.set_zoom(scale)
+            && zoom_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW)
+        {
+            render_into_preview(&zoom_state);
         }
     };
 
@@ -3400,6 +3415,7 @@ fn remember_layout(state: &Rc<State>) {
     });
     let mut config = state.config.borrow_mut();
     config.backlinks_expanded = state.backlinks.is_expanded();
+    config.preview_mode = state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW);
     if let Some((root, folders)) = expanded {
         config.set_expanded_folders(&root, &folders);
     }

@@ -27,6 +27,9 @@ pub struct Config {
     /// Whether the backlinks strip under the editor is open.
     #[serde(default)]
     pub backlinks_expanded: bool,
+    /// Whether the preview, rather than the editor, was showing on the way out.
+    #[serde(default)]
+    pub preview_mode: bool,
     /// Open tree folders (vault-relative), keyed by absolute vault root.
     #[serde(default)]
     pub expanded_folders: BTreeMap<String, Vec<String>>,
