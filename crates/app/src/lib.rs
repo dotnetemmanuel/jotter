@@ -14,7 +14,9 @@ mod drill;
 mod fonts;
 mod git_panel;
 mod git_status;
+mod keysheet;
 mod links;
+mod moves;
 mod picker;
 mod rail;
 mod results;
@@ -98,7 +100,7 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 10] = [
+const PALETTE_COMMANDS: [(&str, &str); 11] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
@@ -108,6 +110,7 @@ const PALETTE_COMMANDS: [(&str, &str); 10] = [
     ("search", "Search notes"),
     ("broken-links", "Show broken links"),
     ("settings", "Settings"),
+    ("keys", "Keyboard shortcuts"),
     ("open-vault", "Open vault"),
 ];
 
@@ -212,6 +215,8 @@ struct State {
     /// The settings window while it is open: the cogwheel toggles it, and a
     /// theme change made elsewhere is reflected back into its controls.
     settings: RefCell<Option<settings::Handle>>,
+    /// The keybinding sheet while it is up, so a second `Ctrl+H` closes it.
+    keysheet: RefCell<Option<gtk::Window>>,
     /// The conflict resolver, which takes the main pane while a rebase is stuck.
     conflict: Rc<conflict_view::View>,
     /// Pending debounced search, replaced on each keystroke.
@@ -377,6 +382,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         git_panel: pages.git,
         rail: Rc::clone(&rail),
         settings: RefCell::new(None),
+        keysheet: RefCell::new(None),
         conflict: Rc::clone(&conflict),
         search_pending: RefCell::new(None),
         git_tx: RefCell::new(None),
@@ -929,8 +935,53 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
     selection.set_autoselect(false);
     selection.set_can_unselect(true);
 
+    let list_view = ListView::new(Some(selection.clone()), Some(tree_factory(state)));
+
+    // Activating a row (Enter or double-click) opens a file, or toggles a folder.
+    let activate_state = Rc::clone(state);
+    let activate_sel = selection.clone();
+    list_view.connect_activate(move |_, position| {
+        let Some(row) = activate_sel
+            .item(position)
+            .and_downcast::<TreeListRow>()
+        else {
+            return;
+        };
+        activate_row(&activate_state, &row);
+    });
+
+    // Single-selection change also opens a file, so a single click is enough.
+    let select_state = Rc::clone(state);
+    selection.connect_selection_changed(move |sel, _, _| {
+        // A selection the app made itself is a highlight, not a request to open.
+        if select_state.quiet_selection.get() {
+            return;
+        }
+        let Some(row) = sel.selected_item().and_downcast::<TreeListRow>() else {
+            return;
+        };
+        if let Some(node) = row.item().and_downcast::<gtk::StringObject>() {
+            let rel = PathBuf::from(node.string().as_str());
+            // Remembered so a rebuild puts the highlight back where the user left it.
+            select_state.wanted_row.replace(Some(rel.clone()));
+            if is_file_node(&select_state, &node.string()) {
+                load_note(&select_state, &rel);
+            }
+        }
+    });
+
+    wire_tree_context_menu(state, &list_view);
+    wire_tree_drop(state, &list_view);
+
+    state.sidebar.set_child(Some(&list_view));
+    tree_model
+}
+
+/// The factory that builds and fills one tree row.
+fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
     let factory = SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
+    let setup_state = Rc::clone(state);
+    factory.connect_setup(move |_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
@@ -944,6 +995,7 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
         line.append(&title);
         let expander = TreeExpander::new();
         expander.set_child(Some(&line));
+        wire_row_drag(&setup_state, &expander);
         item.set_child(Some(&expander));
     });
     let bind_state = Rc::clone(state);
@@ -989,46 +1041,143 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
             name.add_css_class("tree-inert");
         }
     });
+    factory
+}
 
-    let list_view = ListView::new(Some(selection.clone()), Some(factory));
+/// CSS class marking the row a drag is hovering over.
+const DROP_HIGHLIGHT: &str = "tree-drop";
 
-    // Activating a row (Enter or double-click) opens a file, or toggles a folder.
-    let activate_state = Rc::clone(state);
-    let activate_sel = selection.clone();
-    list_view.connect_activate(move |_, position| {
-        let Some(row) = activate_sel
-            .item(position)
-            .and_downcast::<TreeListRow>()
-        else {
-            return;
-        };
-        activate_row(&activate_state, &row);
+/// How long a drop waits before moving anything, in milliseconds.
+const DROP_SETTLE_MS: u64 = 120;
+
+/// The vault-relative path of the tree row a controller is attached to.
+fn row_path(widget: Option<&gtk::Widget>) -> Option<String> {
+    let expander = widget?.downcast_ref::<TreeExpander>()?;
+    let node = expander.list_row()?.item().and_downcast::<gtk::StringObject>()?;
+    Some(node.string().into())
+}
+
+/// Makes a tree row draggable. Dropping is the list's job, not the row's.
+///
+/// The dragged value is the row's vault-relative path, as a plain string, so the
+/// drop side needs nothing but the tree to make sense of it.
+fn wire_row_drag(state: &Rc<State>, expander: &TreeExpander) {
+    let drag = gtk::DragSource::new();
+    drag.set_actions(gdk::DragAction::MOVE);
+    let dragging = Rc::clone(state);
+    drag.connect_prepare(move |source, _, _| {
+        let rel = row_path(source.widget().as_ref())?;
+        // A file jotter does not manage is shown but stays put.
+        if is_file_node(&dragging, &rel) && !tree::is_markdown_name(&rel) {
+            return None;
+        }
+        Some(gdk::ContentProvider::for_value(&rel.to_value()))
+    });
+    drag.connect_drag_begin(|source, _| {
+        if let Some(widget) = source.widget() {
+            source.set_icon(Some(&gtk::WidgetPaintable::new(Some(&widget))), 0, 0);
+        }
+    });
+    expander.add_controller(drag);
+}
+
+/// Lets the tree take a drop, hit-testing the pointer for where it would land.
+///
+/// One target on the list rather than one per row: a target per row would let a
+/// row that refuses the drop fall through to the list behind it, so dropping on
+/// a note in its own folder would silently move it to the vault root.
+fn wire_tree_drop(state: &Rc<State>, list_view: &ListView) {
+    let target = gtk::DropTarget::new(gtk::glib::Type::STRING, gdk::DragAction::MOVE);
+    // Preload so the highlight can tell a legal drop from one that would do nothing.
+    target.set_preload(true);
+    // The row currently wearing the highlight, so it can be taken off again.
+    let marked: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
+
+    let hovering = Rc::clone(state);
+    let hover_view = list_view.clone();
+    let hover_mark = Rc::clone(&marked);
+    target.connect_motion(move |target, x, y| {
+        let (dir, row) = drop_landing(&hovering, &hover_view, x, y);
+        let allowed = dragged_path(target)
+            .and_then(|from| moves::destination(&from, &dir))
+            .is_some();
+        mark_drop_row(&hover_mark, allowed.then_some(row).flatten().as_ref());
+        if allowed {
+            gdk::DragAction::MOVE
+        } else {
+            gdk::DragAction::empty()
+        }
     });
 
-    // Single-selection change also opens a file, so a single click is enough.
-    let select_state = Rc::clone(state);
-    selection.connect_selection_changed(move |sel, _, _| {
-        // A selection the app made itself is a highlight, not a request to open.
-        if select_state.quiet_selection.get() {
-            return;
-        }
-        let Some(row) = sel.selected_item().and_downcast::<TreeListRow>() else {
-            return;
+    let leave_mark = Rc::clone(&marked);
+    target.connect_leave(move |_| mark_drop_row(&leave_mark, None));
+
+    let dropping = Rc::clone(state);
+    let drop_view = list_view.clone();
+    target.connect_drop(move |_, value, x, y| {
+        mark_drop_row(&marked, None);
+        let Ok(from) = value.get::<String>() else {
+            return false;
         };
-        if let Some(node) = row.item().and_downcast::<gtk::StringObject>() {
-            let rel = PathBuf::from(node.string().as_str());
-            // Remembered so a rebuild puts the highlight back where the user left it.
-            select_state.wanted_row.replace(Some(rel.clone()));
-            if is_file_node(&select_state, &node.string()) {
-                load_note(&select_state, &rel);
-            }
-        }
+        let (dir, _) = drop_landing(&dropping, &drop_view, x, y);
+        let Some(to) = moves::destination(&from, &dir) else {
+            return false;
+        };
+        // The move rebuilds the tree, freeing the row being dropped on, and GTK
+        // parks focus on the first row once the drag is torn down, which would
+        // land on top of the selection the move asks for. Both want the drag
+        // finished first, and an idle turn is not late enough.
+        let moving = Rc::clone(&dropping);
+        gtk::glib::timeout_add_local_once(Duration::from_millis(DROP_SETTLE_MS), move || {
+            relocate(&moving, Path::new(&from), Path::new(&to));
+        });
+        true
     });
+    list_view.add_controller(target);
+}
 
-    wire_tree_context_menu(state, &list_view);
+/// Where a drop at list-local (`x`, `y`) lands, and the row to mark for it.
+///
+/// A folder row is itself; a file row is the folder holding it, so dropping onto
+/// a note means "put it beside this one". Empty space is the vault root.
+fn drop_landing(
+    state: &Rc<State>,
+    list_view: &ListView,
+    x: f64,
+    y: f64,
+) -> (String, Option<gtk::Widget>) {
+    let Some(widget) = row_widget_at(list_view, x, y) else {
+        return (String::new(), None);
+    };
+    let Some(rel) = row_path(Some(&widget)) else {
+        return (String::new(), None);
+    };
+    let dir = if is_file_node(state, &rel) {
+        rel.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_owned())
+    } else {
+        rel
+    };
+    (dir, Some(widget))
+}
 
-    state.sidebar.set_child(Some(&list_view));
-    tree_model
+/// Moves the drop highlight onto `row`, taking it off whatever wore it before.
+fn mark_drop_row(marked: &Rc<RefCell<Option<gtk::Widget>>>, row: Option<&gtk::Widget>) {
+    let mut held = marked.borrow_mut();
+    if held.as_ref() == row {
+        return;
+    }
+    if let Some(old) = held.take() {
+        old.remove_css_class(DROP_HIGHLIGHT);
+    }
+    if let Some(row) = row {
+        row.add_css_class(DROP_HIGHLIGHT);
+        *held = Some(row.clone());
+    }
+}
+
+/// The path being dragged, read from a preloading drop target.
+fn dragged_path(target: &gtk::DropTarget) -> Option<String> {
+    target.value()?.get::<String>().ok()
 }
 
 /// Opens a file row or expands/collapses a folder row on activation.
@@ -1714,6 +1863,13 @@ fn wire_settings(app: &Application, state: &Rc<State>) {
     app.add_action(&reset);
     app.set_accels_for_action("app.font-reset", &["<Primary>0"]);
 
+    let sheet = gio::SimpleAction::new("keys", None);
+    let showing = Rc::clone(state);
+    sheet.connect_activate(move |_, _| open_keysheet(&showing));
+    app.add_action(&sheet);
+    // Ctrl+H rather than Ctrl+K, which insert link is keeping.
+    app.set_accels_for_action("app.keys", &["<Primary>h"]);
+
     let clicked = Rc::clone(state);
     state.size.connect_clicked(move |_| reset_font_size(&clicked));
     refresh_size_indicator(state);
@@ -2130,6 +2286,30 @@ fn build_rail(opened: &LateState) -> Rc<rail::Rail> {
 /// Opens the settings window, or closes it when it is already open.
 ///
 /// The same key both ways, like every other panel jotter opens.
+/// Shows the keybinding sheet, or closes it when it is already up.
+///
+/// The labels come from GTK rather than a written list, so the sheet says what is
+/// bound now even if a binding moved.
+fn open_keysheet(state: &Rc<State>) {
+    if let Some(window) = state.keysheet.take() {
+        window.close();
+        return;
+    }
+    let Some(parent) = state.overlay.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+    let app = state.app.clone();
+    let sections = keysheet::sections(&|action| accel_label(&app, action));
+    let window = keysheet::open(&parent, &sections);
+
+    let forgetting = Rc::clone(state);
+    window.connect_close_request(move |_| {
+        forgetting.keysheet.replace(None);
+        gtk::glib::Propagation::Proceed
+    });
+    state.keysheet.replace(Some(window));
+}
+
 fn open_settings(state: &Rc<State>) {
     let open = state.settings.borrow().as_ref().map(|handle| handle.window.clone());
     if let Some(window) = open {
@@ -3461,13 +3641,16 @@ fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
 /// Walks up from the picked widget to the row's `TreeExpander`, whose bound
 /// `TreeListRow` carries the node path. A click in empty space yields `None`.
 fn row_at(list_view: &ListView, x: f64, y: f64) -> Option<PathBuf> {
+    row_path(row_widget_at(list_view, x, y).as_ref()).map(PathBuf::from)
+}
+
+/// The row widget under list-local (`x`, `y`), or `None` over empty space.
+fn row_widget_at(list_view: &ListView, x: f64, y: f64) -> Option<gtk::Widget> {
     let list_view_widget: &gtk::Widget = list_view.upcast_ref();
     let mut widget = list_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
     loop {
-        if let Some(expander) = widget.downcast_ref::<TreeExpander>() {
-            let row = expander.list_row()?;
-            let node = row.item().and_downcast::<gtk::StringObject>()?;
-            return Some(PathBuf::from(node.string().as_str()));
+        if widget.is::<TreeExpander>() {
+            return Some(widget);
         }
         if &widget == list_view_widget {
             return None;
@@ -3617,32 +3800,62 @@ fn rename_folder(state: &Rc<State>, rel: &Path, name: &str) {
         return;
     }
     let to = rel.parent().map(Path::to_path_buf).unwrap_or_default().join(name);
-    let moved_current = {
+    relocate(state, rel, &to);
+}
+
+/// Where the open note ended up, when the move took it along.
+fn moved_current(from: &Path, to: &Path, current: Option<&Path>) -> Option<PathBuf> {
+    let tail = current?.strip_prefix(from).ok()?;
+    Some(to.join(tail))
+}
+
+/// Moves a note or a folder to another vault-relative path, rewriting the links
+/// that named it and following the open note if it moved.
+///
+/// A rename and a drag into another folder are one operation: the path changes,
+/// so path-form links break, and a bare `[[stem]]` breaks too when the name did.
+fn relocate(state: &Rc<State>, from: &Path, to: &Path) {
+    if from.as_os_str().is_empty() || to.as_os_str().is_empty() || from == to {
+        return;
+    }
+    // A rewrite goes straight to disk, so unsaved edits have to land first.
+    save_if_dirty(state);
+
+    let done = {
         let session_ref = state.session.borrow();
         let Some(session) = session_ref.as_ref() else {
             return;
         };
-        if let Err(err) = session.vault.rename_note(rel, &to) {
-            eprintln!("jotter: could not rename folder {}: {err}", rel.display());
-            return;
+        if session.vault.root().join(to).exists() {
+            None
+        } else {
+            let plan = moves::plan(&session.vault, &session.index, from, to);
+            if let Err(err) = session.vault.rename_note(from, to) {
+                eprintln!("jotter: could not move {}: {err}", from.display());
+                return;
+            }
+            moves::reindex(&session.vault, &session.index, &plan);
+            let rewritten = moves::relink(&session.vault, &session.index, &plan);
+            let current = session.current.borrow().clone();
+            Some((moved_current(from, to, current.as_deref()), rewritten))
         }
-        reindex_moved(session, rel, Some(&to));
-        session
-            .current
-            .borrow()
-            .as_ref()
-            .and_then(|current| current.strip_prefix(rel).ok())
-            .map(|tail| to.join(tail))
     };
+    let Some((followed, rewritten)) = done else {
+        say(state, &format!("{} already exists", to.display()));
+        return;
+    };
+
     refresh_tree(state);
-    match moved_current {
-        // The open note moved with the folder, so the tree follows the note.
-        Some(current) => {
-            load_note(state, &current);
-            select_in_tree(state, &current);
-        }
-        None => select_in_tree(state, &to),
+    if let Some(current) = followed {
+        // The open note moved, so the editor and the tree follow it there.
+        load_note(state, &current);
+        select_in_tree(state, &current);
+    } else {
+        // The rewrite may have touched the note on screen.
+        reload_current_note(state);
+        select_in_tree(state, to);
     }
+    say(state, &moves::message(from, to, rewritten.len()));
 }
 
 /// Moves a folder to the trash with everything under it.
@@ -3773,32 +3986,7 @@ fn rename_note(state: &Rc<State>, rel: &Path, name: &str) {
     if to.extension().is_none() {
         to.set_extension("md");
     }
-    let was_current;
-    {
-        let session_ref = state.session.borrow();
-        let Some(session) = session_ref.as_ref() else {
-            return;
-        };
-        match session.vault.rename_note(rel, &to) {
-            Ok(()) => {
-                let _ = vault_session::deindex_note(&session.index, rel);
-                let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, &to);
-            }
-            Err(err) => {
-                eprintln!("jotter: could not rename {}: {err}", rel.display());
-                return;
-            }
-        }
-        // If the renamed note was open, follow it to its new path.
-        was_current = session.current.borrow().as_deref() == Some(rel);
-    }
-    if was_current {
-        load_note(state, &to);
-    }
-    refresh_tree(state);
-    if was_current {
-        select_in_tree(state, &to);
-    }
+    relocate(state, rel, &to);
 }
 
 /// Moves the note at `rel` to the vault trash and drops it from the index.

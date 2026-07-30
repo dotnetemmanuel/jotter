@@ -1,6 +1,5 @@
 ---
 source: crates/theming/tests/generators.rs
-assertion_line: 19
 expression: "resolve(\"retro82\", Mode::Dark).to_gtk_css()"
 ---
 /* retro82 dark */
@@ -75,6 +74,16 @@ paned > separator {
 
 .sidebar listview > row:selected .tree-title {
   color: alpha(#05182e, 0.7);
+}
+
+.tree-drop {
+  box-shadow: inset 0 0 0 2px #faa968;
+  border-radius: 3px;
+}
+
+.sidebar listview:drop(active), .sidebar listview > row:drop(active) {
+  box-shadow: none;
+  outline: none;
 }
 
 .sidebar listview > row:selected {
@@ -284,6 +293,18 @@ popover > contents {
 .settings-close:hover {
   background-color: #134e5a;
   border-radius: 3px;
+}
+
+.keysheet-heading {
+  color: #faa968;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.keysheet-keys {
+  color: #6d8f8a;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
 }
 
 .theme-button {

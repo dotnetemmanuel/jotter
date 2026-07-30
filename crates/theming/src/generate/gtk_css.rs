@@ -32,6 +32,8 @@ paned > separator {{\n  background-color: {overlay};\n  background-image: none;\
 .tree-inert {{\n  color: {muted};\n  opacity: 0.55;\n}}\n\n\
 .tree-title {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
 .sidebar listview > row:selected .tree-title {{\n  color: alpha({bg}, 0.7);\n}}\n\n\
+.tree-drop {{\n  box-shadow: inset 0 0 0 2px {accent};\n  border-radius: {r}px;\n}}\n\n\
+.sidebar listview:drop(active), .sidebar listview > row:drop(active) {{\n  box-shadow: none;\n  outline: none;\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .sidebar listview > row:selected:hover {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 button {{\n  background-color: {surface};\n  background-image: none;\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n  padding: 6px 14px;\n}}\n\n\
@@ -91,6 +93,8 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
 .settings-label {{\n  color: {muted};\n}}\n\n\
 .settings-close {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {text};\n  padding: 4px 8px;\n  min-height: 0;\n  min-width: 0;\n}}\n\n\
 .settings-close:hover {{\n  background-color: {overlay};\n  border-radius: {r}px;\n}}\n\n\
+.keysheet-heading {{\n  color: {accent};\n  font-size: {small}px;\n  font-weight: bold;\n}}\n\n\
+.keysheet-keys {{\n  color: {muted};\n  font-family: {editor_font};\n  font-size: {small}px;\n}}\n\n\
 .theme-button {{\n  padding: 6px;\n}}\n\n\
 .theme-name {{\n  font-size: {small}px;\n}}\n\n\
 .conflict {{\n  background-color: {bg};\n  padding: 10px 12px;\n}}\n\n\

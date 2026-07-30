@@ -402,9 +402,14 @@ Same fallback for partial clone, sparse checkout, and awkward rebases.
 
 Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
 
-- **Keybinding sheet on `Ctrl+H`.** A dialog listing every binding the app has,
-  read from the same table that registers the accelerators so it cannot drift.
-  `Ctrl+H` for help, chosen so insert link keeps `Ctrl+K`.
+- **Keybinding sheet on `Ctrl+H`.** A window listing every binding the app has.
+  `Ctrl+H` for help, chosen so insert link keeps `Ctrl+K`. It cannot drift because
+  it writes no accelerator down: `crates/app/src/keysheet.rs` names actions and
+  what they do, and the label comes back from `Application::accels_for_action` at
+  display time. An action with no accelerator is dropped rather than shown blank,
+  and a section left empty by that goes with it. Widget-owned keys (Escape, the
+  conflict resolver's `a d b e`) are a fixed block, since GTK has no accelerator
+  to report for them.
 - **Icon rail left of the file tree.** Always visible, notes icon at the top and
   a cogwheel at the bottom. `Ctrl+B` keeps collapsing only the tree, so the rail
   stays put and the sidebar stack moves inside it. The rail is a third column in
@@ -414,17 +419,30 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
   size for each, and a theme picked from the app theme folder. Writes through
   `Config`, applies live the way `Ctrl+T` already restyles every surface.
 
-- **Drag and drop in the tree.** Move a note into a folder by dragging it, the
-  one vault operation with no path today: `Vault::rename_note` already moves
-  across folders and creates parent directories, but the tree UI joins the typed
-  name onto the note's existing parent, so a rename cannot leave its folder.
-  Needs drop targets on folder rows and on the root, a moved-note reindex (the
-  rename path already does this), and a link rewrite: bare `[[stem]]` links
-  survive a move by design, path-form `[[notes/plan]]` links do not, so the move
-  rewrites them. The `links` table already names every note pointing at the moved
-  one (`Index::linking_notes`), so the move reads those notes, rewrites the
-  path-form targets, and reindexes them. The same machinery serves a rename,
-  which today silently breaks every `[[stem]]` link pointing at the old name.
+- **Drag and drop in the tree.** Move a note or a folder by dragging it, the one
+  vault operation that had no path: `Vault::rename_note` already moves across
+  folders and creates parent directories, but the tree UI joined the typed name
+  onto the note's existing parent, so a rename could not leave its folder.
+
+  A rename and a drag are one operation, `relocate`, so a rename now mends the
+  `[[stem]]` links it used to break silently. `crates/app/src/moves.rs` holds it:
+  where a drop lands, what each affected link should say, and the plan a move has
+  to read before it happens. Bare `[[stem]]` links survive a change of folder by
+  design and are left alone; a change of name breaks them, so they are rewritten
+  to the new stem, or to the path when the stem became ambiguous. Path-form
+  `[[notes/plan]]` links are always rewritten, and stay path-form, since the
+  author spelled the folder out on purpose.
+
+  Order matters and is the part to be careful with: the linkers and a snapshot of
+  the old resolution have to be read *before* the move, because reindexing
+  re-resolves the links table and clears the rows that named the old path.
+
+  Two things learned by testing it: one drop target on the `ListView`,
+  hit-testing the pointer, not one per row (a row that refuses a drop lets it
+  fall through to the list behind it, so dropping a note in its own folder would
+  silently move it to the vault root); and the move waits out the drag teardown
+  before touching anything, because GTK parks focus on the first row once the
+  drag ends and would land on top of the selection the move asks for.
 
 - **Ask before adopting a folder.** Any directory argument is treated as a vault
   today: `Vault::open` only checks that it is a directory, and jotter then
@@ -466,7 +484,7 @@ Ctrl+O quick switcher, Ctrl+P command palette, Ctrl+Shift+F full-text search,
 Ctrl+N new note (current folder), Ctrl+Shift+N new note (root), Ctrl+S save,
 Ctrl+B toggle sidebar, Ctrl+E switch mode, Ctrl+T toggle theme light/dark,
 Ctrl+/ toggle line comment,
-Ctrl+H keybinding sheet (phase 6), Ctrl+, settings, Ctrl+plus and Ctrl+minus
+Ctrl+H keybinding sheet, Ctrl+, settings, Ctrl+plus and Ctrl+minus
 font size, Ctrl+0 back to the theme's size, Ctrl+scroll the same,
 Ctrl+K insert link,
 Ctrl+Shift+K insert wikilink, Alt+Left back, Alt+Right forward,

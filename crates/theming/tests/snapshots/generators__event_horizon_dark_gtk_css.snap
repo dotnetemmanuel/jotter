@@ -1,6 +1,5 @@
 ---
 source: crates/theming/tests/generators.rs
-assertion_line: 44
 expression: "resolve(\"event-horizon\", Mode::Dark).to_gtk_css()"
 ---
 /* Event Horizon dark */
@@ -75,6 +74,16 @@ paned > separator {
 
 .sidebar listview > row:selected .tree-title {
   color: alpha(#1c1e26, 0.7);
+}
+
+.tree-drop {
+  box-shadow: inset 0 0 0 2px #ee64ac;
+  border-radius: 3px;
+}
+
+.sidebar listview:drop(active), .sidebar listview > row:drop(active) {
+  box-shadow: none;
+  outline: none;
 }
 
 .sidebar listview > row:selected {
@@ -284,6 +293,18 @@ popover > contents {
 .settings-close:hover {
   background-color: #2e303e;
   border-radius: 3px;
+}
+
+.keysheet-heading {
+  color: #ee64ac;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.keysheet-keys {
+  color: #6c6f93;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
 }
 
 .theme-button {

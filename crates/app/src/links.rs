@@ -204,7 +204,7 @@ fn normalize_target(target: &str) -> String {
 }
 
 /// The filename stem of a vault-relative path.
-fn stem_of(path: &str) -> Option<&str> {
+pub fn stem_of(path: &str) -> Option<&str> {
     let file = path.rsplit('/').next()?;
     Some(file.strip_suffix(".md").unwrap_or(file))
 }
