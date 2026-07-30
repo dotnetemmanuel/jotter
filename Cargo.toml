@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/jotter"]
+# A test-driving tool, not part of the app: excluded so a workspace build does not
+# pull Wayland client crates in. See tools/gui-test/README.md.
+exclude = ["tools/gui-test/wlpoint"]
 
 [workspace.package]
 version = "0.1.0"

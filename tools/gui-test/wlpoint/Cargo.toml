@@ -1,0 +1,10 @@
+[package]
+name = "wlpoint"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Injects pointer events into a wlroots compositor, for driving jotter headlessly"
+
+[dependencies]
+wayland-client = "0.31.12"
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

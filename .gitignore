@@ -24,3 +24,6 @@ rustc-ice-*.txt
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# The GUI test tool is built on demand and lives outside the workspace.
+/tools/gui-test/wlpoint/target/
