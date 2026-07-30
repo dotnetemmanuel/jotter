@@ -3,6 +3,7 @@
 //! edit-preview toggle loop, and (in vault mode) the file tree, background index,
 //! and filesystem watcher. The binary stays thin and only calls `run`.
 
+mod appearance;
 mod backlinks;
 mod commands;
 mod complete;
@@ -10,17 +11,24 @@ mod conflict_model;
 mod conflict_view;
 mod config;
 mod drill;
+mod fonts;
 mod git_panel;
 mod git_status;
+mod keysheet;
 mod links;
+mod moves;
 mod picker;
+mod rail;
 mod results;
 mod search;
 mod search_panel;
+mod settings;
 mod switcher;
+mod themes;
 mod title;
 mod tree;
 mod vault_session;
+mod vaults;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -92,7 +100,7 @@ const MAX_PICKER_ROWS: usize = 50;
 const MAX_COMPLETION_ROWS: usize = 8;
 
 /// Actions the command palette offers, in the order it lists them.
-const PALETTE_COMMANDS: [(&str, &str); 8] = [
+const PALETTE_COMMANDS: [(&str, &str); 11] = [
     ("quick-open", "Go to note"),
     ("save", "Save note"),
     ("toggle-mode", "Toggle edit and preview"),
@@ -101,6 +109,9 @@ const PALETTE_COMMANDS: [(&str, &str); 8] = [
     ("tags", "Browse tags"),
     ("search", "Search notes"),
     ("broken-links", "Show broken links"),
+    ("settings", "Settings"),
+    ("keys", "Keyboard shortcuts"),
+    ("open-vault", "Open vault"),
 ];
 
 /// Fallback document shown when no path is given or a read fails.
@@ -143,8 +154,9 @@ struct State {
     stack: Stack,
     /// Active resolved theme; swapped in place on a light/dark toggle.
     theme: RefCell<Theme>,
-    /// Parsed theme source, re-resolved for the other mode on toggle.
-    theme_file: ThemeFile,
+    /// Parsed theme source, re-resolved on a mode toggle and replaced when the
+    /// user picks another theme.
+    theme_file: RefCell<ThemeFile>,
     /// Display-level chrome CSS provider, restyled in place on toggle.
     chrome_provider: CssProvider,
     /// Caret line (0-based) cached when leaving the editor, restored on return.
@@ -153,12 +165,17 @@ struct State {
     pending: RefCell<Option<SourceId>>,
     /// The left sidebar container, whose visibility `Ctrl+B` toggles.
     sidebar: ScrolledWindow,
+    /// The open vault's name, above the tree.
+    vault_name: Label,
     /// The bottom status label (indexing progress, note counts).
     status: Label,
     /// The broken-link count at the right of the status bar, hidden when zero.
     broken: gtk::Button,
     /// The git segment at the far right, hidden for a vault with no repository.
     git: gtk::Button,
+    /// The font size, shown only while it differs from the theme's own, and
+    /// clickable to put it back.
+    size: gtk::Button,
     /// The active vault session, absent in single-file mode.
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
@@ -193,6 +210,13 @@ struct State {
     report_panel: Rc<drill::Panel>,
     /// The git page: what changed since the last commit.
     git_panel: Rc<git_panel::Panel>,
+    /// The icon rail at the left edge, outside everything Ctrl+B collapses.
+    rail: Rc<rail::Rail>,
+    /// The settings window while it is open: the cogwheel toggles it, and a
+    /// theme change made elsewhere is reflected back into its controls.
+    settings: RefCell<Option<settings::Handle>>,
+    /// The keybinding sheet while it is up, so a second `Ctrl+H` closes it.
+    keysheet: RefCell<Option<gtk::Window>>,
     /// The conflict resolver, which takes the main pane while a rebase is stuck.
     conflict: Rc<conflict_view::View>,
     /// Pending debounced search, replaced on each keystroke.
@@ -212,21 +236,74 @@ struct State {
 /// Returns the process exit code from `gtk::Application::run`.
 #[must_use]
 pub fn run() -> gtk::glib::ExitCode {
-    let app = Application::builder().application_id(APP_ID).build();
+    // Handling the command line ourselves is what lets a second launch reach the
+    // window that is already open, carrying its path with it.
+    let app = Application::builder()
+        .application_id(APP_ID)
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .build();
 
-    // First positional arg after the program name, if any, is a vault or file path.
-    let path_arg: Rc<Option<String>> = Rc::new(std::env::args().nth(1));
+    // jotter is one window, and switching vaults inside it is a first-class
+    // action, so a second launch hands its path to that window rather than
+    // building a second one: two windows in one process would rebind every
+    // action to the newer of them and watch the vault twice.
+    let open: Rc<RefCell<Option<Rc<State>>>> = Rc::new(RefCell::new(None));
+    app.connect_command_line(move |app, cmdline| {
+        let path = launch_path(cmdline);
+        let running = open.borrow().clone();
+        match running {
+            Some(state) => reuse_window(&state, path.as_deref()),
+            None => *open.borrow_mut() = build_ui(app, path.as_deref()),
+        }
+        gtk::glib::ExitCode::SUCCESS
+    });
 
-    app.connect_activate(move |app| build_ui(app, path_arg.as_ref().as_deref()));
+    // The real argv, because with HANDLES_COMMAND_LINE the path arrives through
+    // the command line rather than being read from the environment: that is how a
+    // launch reaches an instance that is already running.
+    app.run()
+}
 
-    // GTK owns args itself; passing an empty slice avoids double-parsing our path.
-    app.run_with_args::<&str>(&[])
+/// The first positional argument of a launch, a vault or a file path.
+fn launch_path(cmdline: &gio::ApplicationCommandLine) -> Option<String> {
+    cmdline
+        .arguments()
+        .get(1)
+        .and_then(|arg| arg.to_str().map(str::to_owned))
+}
+
+/// Brings the open window forward, switching vaults if the launch named one.
+fn reuse_window(state: &Rc<State>, path: Option<&str>) {
+    if let Some(window) = state.overlay.root().and_downcast::<gtk::Window>() {
+        window.present();
+    }
+    let Some(path) = path else {
+        return;
+    };
+    let Ok(root) = std::fs::canonicalize(path) else {
+        say(state, &format!("No such path: {path}"));
+        return;
+    };
+    if !root.is_dir() {
+        open_single_file(state, Some(&root));
+        return;
+    }
+    let already = state
+        .session
+        .borrow()
+        .as_ref()
+        .is_some_and(|session| session.vault.root() == root);
+    if !already {
+        open_vault(state, &root, None);
+    }
 }
 
 /// What the app should open, resolved from the CLI arg and saved config.
 enum Startup {
     /// Open `root` as a vault, restoring `note` (vault-relative) if present.
     Vault { root: PathBuf, note: Option<PathBuf> },
+    /// Ask which of the known vaults to open.
+    Pick,
     /// Open a single markdown file (no sidebar). `None` means the built-in sample.
     File(Option<PathBuf>),
 }
@@ -245,13 +322,17 @@ fn resolve_startup(arg: Option<&str>, config: &Config) -> Startup {
         }
         return Startup::File(Some(path));
     }
-    if let Some(root) = config.most_recent_vault()
-        && root.is_dir()
-    {
-        let note = config.last_active_for(&root);
-        return Startup::Vault { root, note };
+    // More than one vault to choose from is a question, not a guess; a single
+    // one is not worth asking about.
+    let known = vaults::known(&config.recent_vaults);
+    match known.len() {
+        0 => Startup::File(None),
+        1 => Startup::Vault {
+            note: config.last_active_for(&known[0].path),
+            root: known[0].path.clone(),
+        },
+        _ => Startup::Pick,
     }
-    Startup::File(None)
 }
 
 /// Apply a theme's chrome CSS to the display through `provider`, creating the
@@ -276,21 +357,9 @@ fn install_chrome_css(theme: &Theme) -> CssProvider {
 }
 
 /// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
-fn build_ui(app: &Application, path_arg: Option<&str>) {
-    let theme_file = match jotter_theming::bundled::default_theme_file() {
-        Ok(file) => file,
-        Err(err) => {
-            eprintln!("jotter: could not load default theme: {err}");
-            return;
-        }
-    };
-    let theme = match theme_file.resolve(jotter_theming::bundled::DEFAULT_MODE) {
-        Ok(theme) => theme,
-        Err(err) => {
-            eprintln!("jotter: could not resolve default theme: {err}");
-            return;
-        }
-    };
+fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
+    let config = Config::load();
+    let (theme_file, theme) = startup_theme(&config)?;
 
     let chrome_provider = install_chrome_css(&theme);
 
@@ -313,9 +382,10 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .build();
     // The stack carries `.sidebar`, so styling it here would draw a second border.
 
-    let (status_bar, status, broken, git) = build_status_bar();
+    let (status_bar, status, broken, git, size) = build_status_bar();
 
-    let (pages, opened) = build_sidebar(&sidebar, &theme.chrome.accent);
+    let (vault_name, tree_page) = build_tree_page(&sidebar);
+    let (pages, opened) = build_sidebar(&tree_page, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
 
     // Built here because it needs the same late-bound state the sidebar rows use.
@@ -323,8 +393,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     stack.add_named(&conflict.widget(), Some(PAGE_CONFLICT));
 
     let backlinks = build_backlinks(&theme.chrome.accent, &opened);
+    let rail = build_rail(&opened);
 
-    let config = Config::load();
     let startup = resolve_startup(path_arg, &config);
 
     let state = Rc::new(State {
@@ -332,14 +402,16 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         preview,
         stack: stack.clone(),
         theme: RefCell::new(theme),
-        theme_file,
+        theme_file: RefCell::new(theme_file),
         chrome_provider,
         cached_caret: RefCell::new(0),
         pending: RefCell::new(None),
         sidebar: sidebar.clone(),
+        vault_name: vault_name.clone(),
         status: status.clone(),
         broken,
         git: git.clone(),
+        size: size.clone(),
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
@@ -357,6 +429,9 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         tags_panel: pages.tags,
         report_panel: pages.report,
         git_panel: pages.git,
+        rail: Rc::clone(&rail),
+        settings: RefCell::new(None),
+        keysheet: RefCell::new(None),
         conflict: Rc::clone(&conflict),
         search_pending: RefCell::new(None),
         git_tx: RefCell::new(None),
@@ -370,6 +445,12 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     match startup {
         Startup::Vault { root, note } => open_vault(&state, &root, note.as_deref()),
         Startup::File(path) => open_single_file(&state, path.as_deref()),
+        Startup::Pick => {
+            open_single_file(&state, None);
+            let picking = Rc::clone(&state);
+            // After the window exists: the picker is an overlay on it.
+            gtk::glib::idle_add_local_once(move || pick_vault(&picking));
+        }
     }
 
     wire_actions(app, &state);
@@ -388,19 +469,15 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
         .position(240)
         .build();
 
-    let root_box = gtk::Box::new(Orientation::Vertical, 0);
-    root_box.append(&paned);
-    root_box.append(&gtk::Separator::new(Orientation::Horizontal));
-    root_box.append(&status_bar);
-    paned.set_vexpand(true);
-    state.overlay.set_child(Some(&root_box));
+    state.overlay.set_child(Some(&assemble(&rail.widget(), &paned, &status_bar)));
 
     present_window(app, &state);
+    Some(state)
 }
 
 /// Builds the bottom bar: the status message, and the broken-link count that
 /// sits at its right until there is nothing broken to report.
-fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
+fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button, gtk::Button) {
     let status = Label::builder()
         .halign(gtk::Align::Start)
         .margin_start(8)
@@ -424,6 +501,14 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
         .build();
     git.add_css_class("status-git");
 
+    let size = gtk::Button::builder()
+        .has_frame(false)
+        .halign(gtk::Align::End)
+        .visible(false)
+        .tooltip_text("Back to the theme's size")
+        .build();
+    size.add_css_class("status-size");
+
     // An explicit spacer, because the right-hand widgets come and go and a
     // hidden one cannot hold the gap open.
     let spacer = gtk::Box::new(Orientation::Horizontal, 0);
@@ -432,9 +517,70 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button) {
     let bar = gtk::Box::new(Orientation::Horizontal, 0);
     bar.append(&status);
     bar.append(&spacer);
+    bar.append(&size);
     bar.append(&git);
     bar.append(&broken);
-    (bar, status, broken, git)
+    (bar, status, broken, git, size)
+}
+
+/// The theme jotter starts in: whatever the config asks for, with the user's
+/// appearance on top. `None` when even the fallback will not resolve, which is
+/// a broken build rather than a broken config.
+fn startup_theme(config: &Config) -> Option<(ThemeFile, Theme)> {
+    let wanted = config
+        .appearance
+        .theme
+        .clone()
+        .unwrap_or_else(|| jotter_theming::bundled::DEFAULT_ID.to_string());
+    let file = match themes::load(&wanted) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("jotter: could not load theme {wanted}: {err}");
+            return None;
+        }
+    };
+    match appearance::resolve(&file, &config.appearance) {
+        Ok(theme) => Some((file, theme)),
+        Err(err) => {
+            eprintln!("jotter: could not resolve theme {wanted}: {err}");
+            None
+        }
+    }
+}
+
+/// The tree page: the vault's name over the tree, so which vault is open is
+/// answerable at a glance rather than from the window title.
+fn build_tree_page(tree: &ScrolledWindow) -> (Label, gtk::Box) {
+    let name = Label::builder()
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::Middle)
+        .build();
+    name.add_css_class("vault-name");
+
+    // The header takes its own height; the tree takes the rest, or it collapses
+    // to a couple of rows inside the box.
+    tree.set_vexpand(true);
+    let page = gtk::Box::new(Orientation::Vertical, 0);
+    page.append(&name);
+    page.append(tree);
+    (name, page)
+}
+
+/// Lays the window out: rail, then the paned area, with the status bar under
+/// both. The rail sits outside the paned area, so `Ctrl+B` collapses the tree
+/// and leaves the rail where it is.
+fn assemble(rail: &gtk::Widget, paned: &Paned, status_bar: &gtk::Box) -> gtk::Box {
+    let with_rail = gtk::Box::new(Orientation::Horizontal, 0);
+    with_rail.append(rail);
+    with_rail.append(&gtk::Separator::new(Orientation::Vertical));
+    with_rail.append(paned);
+    with_rail.set_vexpand(true);
+
+    let root = gtk::Box::new(Orientation::Vertical, 0);
+    root.append(&with_rail);
+    root.append(&gtk::Separator::new(Orientation::Horizontal));
+    root.append(status_bar);
+    root
 }
 
 /// Builds the window around the already-assembled layout and shows it.
@@ -447,6 +593,27 @@ fn present_window(app: &Application, state: &Rc<State>) {
         .child(&state.overlay)
         .build();
     window.set_titlebar(Some(&HeaderBar::new()));
+
+    // Settings is a separate toplevel, so a keypress can land here rather than
+    // on it. Escape closes it from either window: one state, open or closed.
+    let escaping = Rc::clone(state);
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    keys.connect_key_pressed(move |_, key, _, _| {
+        let open = escaping
+            .settings
+            .borrow()
+            .as_ref()
+            .map(|handle| handle.window.clone());
+        if key == gdk::Key::Escape
+            && let Some(settings) = open
+        {
+            settings.close();
+            return gtk::glib::Propagation::Stop;
+        }
+        gtk::glib::Propagation::Proceed
+    });
+    window.add_controller(keys);
     wire_preview_zoom(&window, state);
     wire_save_on_close(&window, state);
     window.present();
@@ -470,15 +637,154 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     };
     state.editor.set_initial_text(&initial);
     state.single_file.replace(path.map(Path::to_path_buf));
+    // After set_initial_text, which counts as a buffer change and would otherwise
+    // leave the title wearing an unsaved marker for a file nobody has touched.
     state.dirty.set(false);
-    // Single-file mode has an empty, non-interactive sidebar.
+    // Single-file mode has an empty, non-interactive sidebar, and coming here from
+    // a vault has to leave the tree and the session behind rather than stale rows.
+    state.session.replace(None);
+    state.sidebar.set_child(None::<&gtk::Widget>);
     state.status.set_text("no vault open");
+    state.vault_name.set_visible(false);
     stop_git(state);
+    refresh_backlinks(state);
+    refresh_window_title(state);
+}
+
+/// The row key the vault picker uses for "somewhere else".
+const BROWSE_KEY: &str = "\u{0}browse";
+
+/// Offers the vaults jotter knows, and a way to a folder it does not.
+fn pick_vault(state: &Rc<State>) {
+    let known = vaults::known(&state.config.borrow().recent_vaults);
+
+    let rows: Vec<picker::Row> = known
+        .iter()
+        .map(|vault| picker::Row {
+            key: vault.path.display().to_string(),
+            label: vault.name.clone(),
+            detail: vault.path.display().to_string(),
+            positions: Vec::new(),
+        })
+        .chain(std::iter::once(picker::Row {
+            key: BROWSE_KEY.to_string(),
+            label: "Open another folder...".to_string(),
+            detail: String::new(),
+            positions: Vec::new(),
+        }))
+        .collect();
+
+    let source = move |query: &str| {
+        let query = query.trim().to_lowercase();
+        rows.iter()
+            .filter(|row| {
+                query.is_empty()
+                    || row.key == BROWSE_KEY
+                    || row.label.to_lowercase().contains(&query)
+                    || row.detail.to_lowercase().contains(&query)
+            })
+            .map(|row| picker::Row {
+                key: row.key.clone(),
+                label: row.label.clone(),
+                detail: row.detail.clone(),
+                positions: Vec::new(),
+            })
+            .collect()
+    };
+
+    let chosen = Rc::clone(state);
+    let closing = Rc::clone(state);
+    let handle = picker::open(
+        &state.overlay,
+        "Open which vault?",
+        "",
+        source,
+        move |key| {
+            if key == BROWSE_KEY {
+                browse_for_vault(&chosen);
+                return;
+            }
+            let root = PathBuf::from(key);
+            let note = chosen.config.borrow().last_active_for(&root);
+            open_vault(&chosen, &root, note.as_deref());
+        },
+        move || {
+            closing.picker.replace(None);
+        },
+    );
+    state.picker.replace(Some(handle));
+}
+
+/// Where to go when a folder is not adopted: another known vault, or the sample.
+fn fall_back_from_vault(state: &Rc<State>) {
+    if state.session.borrow().is_some() {
+        return;
+    }
+    if vaults::known(&state.config.borrow().recent_vaults).is_empty() {
+        open_single_file(state, None);
+        return;
+    }
+    pick_vault(state);
+}
+
+/// Asks the desktop for a folder, then opens it (asking first if it is new).
+fn browse_for_vault(state: &Rc<State>) {
+    let parent = state.overlay.root().and_downcast::<gtk::Window>();
+    let dialog = gtk::FileDialog::builder()
+        .title("Choose a folder to open as a vault")
+        .modal(true)
+        .build();
+    let opening = Rc::clone(state);
+    dialog.select_folder(
+        parent.as_ref(),
+        None::<&gio::Cancellable>,
+        move |result| {
+            if let Ok(folder) = result
+                && let Some(path) = folder.path()
+            {
+                open_vault(&opening, &path, None);
+            }
+        },
+    );
+}
+
+/// Opens `root`, asking first when the folder has never been a vault.
+///
+/// Adopting a folder writes a `.jotter` directory into it and indexes every
+/// markdown file underneath, which is not something to do to a folder someone
+/// pointed at by accident, or to a home directory.
+fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
+    if vaults::is_vault(root) {
+        open_vault_now(state, root, note);
+        return;
+    }
+
+    let (notes, more) = vaults::count_notes(root);
+    let question = vaults::adopt_question(root, notes, more);
+    let asking = Rc::clone(state);
+    let root = root.to_path_buf();
+    let note = note.map(Path::to_path_buf);
+    // Deferred: at startup the window does not exist yet, and a modal dialog
+    // needs a parent to be modal to.
+    gtk::glib::idle_add_local_once(move || {
+        let opening = Rc::clone(&asking);
+        let refused = Rc::clone(&asking);
+        confirm_tone(
+            &asking,
+            &question,
+            "Open as vault",
+            false,
+            move || open_vault_now(&opening, &root, note.as_deref()),
+            // Saying no must land somewhere: the vaults already known, or the
+            // sample, rather than an empty window with nothing to do.
+            move || fall_back_from_vault(&refused),
+        );
+    });
 }
 
 /// Opens `root` as a vault: builds the tree, records it in recents, starts the
 /// background index and the watcher, and loads the requested (or first) note.
-fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
+fn open_vault_now(state: &Rc<State>, root: &Path, note: Option<&Path>) {
     let vault = match Vault::open(root) {
         Ok(vault) => vault,
         Err(err) => {
@@ -522,6 +828,11 @@ fn open_vault(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         titles: RefCell::new(HashMap::new()),
         is_git: jotter_git::Repo::discover(root).is_some(),
     }));
+
+    state.vault_name.set_text(&vaults::known(&[root.display().to_string()])
+        .first()
+        .map_or_else(|| root.display().to_string(), |vault| vault.name.clone()));
+    state.vault_name.set_visible(true);
 
     // Written whether or not the vault is a repo: one that becomes one later is
     // covered without jotter having to notice.
@@ -681,57 +992,7 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
     selection.set_autoselect(false);
     selection.set_can_unselect(true);
 
-    let factory = SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let line = gtk::Box::new(Orientation::Horizontal, 6);
-        line.append(&Label::builder().halign(gtk::Align::Start).build());
-        let title = Label::builder()
-            .halign(gtk::Align::Start)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        title.add_css_class("tree-title");
-        line.append(&title);
-        let expander = TreeExpander::new();
-        expander.set_child(Some(&line));
-        item.set_child(Some(&expander));
-    });
-    let bind_state = Rc::clone(state);
-    factory.connect_bind(move |_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let Some(row) = item.item().and_downcast::<TreeListRow>() else {
-            return;
-        };
-        let Some(expander) = item.child().and_downcast::<TreeExpander>() else {
-            return;
-        };
-        expander.set_list_row(Some(&row));
-        let Some(node) = row.item().and_downcast::<gtk::StringObject>() else {
-            return;
-        };
-        let Some(line) = expander.child().and_downcast::<gtk::Box>() else {
-            return;
-        };
-        let (Some(name), Some(title)) = (
-            line.first_child().and_downcast::<Label>(),
-            line.last_child().and_downcast::<Label>(),
-        ) else {
-            return;
-        };
-        let rel = node.string();
-        let label = tree::label_for(&rel);
-        name.set_text(label);
-        let stem = label.strip_suffix(".md").unwrap_or(label);
-        let shown = note_title(&bind_state, &rel).filter(|found| found != stem);
-        title.set_text(shown.as_deref().unwrap_or_default());
-        title.set_visible(shown.is_some());
-    });
-
-    let list_view = ListView::new(Some(selection.clone()), Some(factory));
+    let list_view = ListView::new(Some(selection.clone()), Some(tree_factory(state)));
 
     // Activating a row (Enter or double-click) opens a file, or toggles a folder.
     let activate_state = Rc::clone(state);
@@ -767,9 +1028,213 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
     });
 
     wire_tree_context_menu(state, &list_view);
+    wire_tree_drop(state, &list_view);
 
     state.sidebar.set_child(Some(&list_view));
     tree_model
+}
+
+/// The factory that builds and fills one tree row.
+fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
+    let factory = SignalListItemFactory::new();
+    let setup_state = Rc::clone(state);
+    factory.connect_setup(move |_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let line = gtk::Box::new(Orientation::Horizontal, 6);
+        line.append(&Label::builder().halign(gtk::Align::Start).build());
+        let title = Label::builder()
+            .halign(gtk::Align::Start)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        title.add_css_class("tree-title");
+        line.append(&title);
+        let expander = TreeExpander::new();
+        expander.set_child(Some(&line));
+        wire_row_drag(&setup_state, &expander);
+        item.set_child(Some(&expander));
+    });
+    let bind_state = Rc::clone(state);
+    factory.connect_bind(move |_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let Some(row) = item.item().and_downcast::<TreeListRow>() else {
+            return;
+        };
+        let Some(expander) = item.child().and_downcast::<TreeExpander>() else {
+            return;
+        };
+        expander.set_list_row(Some(&row));
+        let Some(node) = row.item().and_downcast::<gtk::StringObject>() else {
+            return;
+        };
+        let Some(line) = expander.child().and_downcast::<gtk::Box>() else {
+            return;
+        };
+        let (Some(name), Some(title)) = (
+            line.first_child().and_downcast::<Label>(),
+            line.last_child().and_downcast::<Label>(),
+        ) else {
+            return;
+        };
+        let rel = node.string();
+        let label = tree::label_for(&rel);
+        name.set_text(label);
+        let stem = label.strip_suffix(".md").unwrap_or(label);
+        let shown = note_title(&bind_state, &rel).filter(|found| found != stem);
+        title.set_text(shown.as_deref().unwrap_or_default());
+        title.set_visible(shown.is_some());
+
+        // A file jotter cannot open is shown so its folder does not look empty,
+        // but dimmed and inert: no selection, no activation, nothing to click.
+        let openable = row.is_expandable() || tree::is_markdown_name(&rel);
+        item.set_selectable(openable);
+        item.set_activatable(openable);
+        if openable {
+            name.remove_css_class("tree-inert");
+        } else {
+            name.add_css_class("tree-inert");
+        }
+    });
+    factory
+}
+
+/// CSS class marking the row a drag is hovering over.
+const DROP_HIGHLIGHT: &str = "tree-drop";
+
+/// How long a drop waits before moving anything, in milliseconds.
+const DROP_SETTLE_MS: u64 = 120;
+
+/// The vault-relative path of the tree row a controller is attached to.
+fn row_path(widget: Option<&gtk::Widget>) -> Option<String> {
+    let expander = widget?.downcast_ref::<TreeExpander>()?;
+    let node = expander.list_row()?.item().and_downcast::<gtk::StringObject>()?;
+    Some(node.string().into())
+}
+
+/// Makes a tree row draggable. Dropping is the list's job, not the row's.
+///
+/// The dragged value is the row's vault-relative path, as a plain string, so the
+/// drop side needs nothing but the tree to make sense of it.
+fn wire_row_drag(state: &Rc<State>, expander: &TreeExpander) {
+    let drag = gtk::DragSource::new();
+    drag.set_actions(gdk::DragAction::MOVE);
+    let dragging = Rc::clone(state);
+    drag.connect_prepare(move |source, _, _| {
+        let rel = row_path(source.widget().as_ref())?;
+        // A file jotter does not manage is shown but stays put.
+        if is_file_node(&dragging, &rel) && !tree::is_markdown_name(&rel) {
+            return None;
+        }
+        Some(gdk::ContentProvider::for_value(&rel.to_value()))
+    });
+    drag.connect_drag_begin(|source, _| {
+        if let Some(widget) = source.widget() {
+            source.set_icon(Some(&gtk::WidgetPaintable::new(Some(&widget))), 0, 0);
+        }
+    });
+    expander.add_controller(drag);
+}
+
+/// Lets the tree take a drop, hit-testing the pointer for where it would land.
+///
+/// One target on the list rather than one per row: a target per row would let a
+/// row that refuses the drop fall through to the list behind it, so dropping on
+/// a note in its own folder would silently move it to the vault root.
+fn wire_tree_drop(state: &Rc<State>, list_view: &ListView) {
+    let target = gtk::DropTarget::new(gtk::glib::Type::STRING, gdk::DragAction::MOVE);
+    // Preload so the highlight can tell a legal drop from one that would do nothing.
+    target.set_preload(true);
+    // The row currently wearing the highlight, so it can be taken off again.
+    let marked: Rc<RefCell<Option<gtk::Widget>>> = Rc::new(RefCell::new(None));
+
+    let hovering = Rc::clone(state);
+    let hover_view = list_view.clone();
+    let hover_mark = Rc::clone(&marked);
+    target.connect_motion(move |target, x, y| {
+        let (dir, row) = drop_landing(&hovering, &hover_view, x, y);
+        let allowed = dragged_path(target)
+            .and_then(|from| moves::destination(&from, &dir))
+            .is_some();
+        mark_drop_row(&hover_mark, allowed.then_some(row).flatten().as_ref());
+        if allowed {
+            gdk::DragAction::MOVE
+        } else {
+            gdk::DragAction::empty()
+        }
+    });
+
+    let leave_mark = Rc::clone(&marked);
+    target.connect_leave(move |_| mark_drop_row(&leave_mark, None));
+
+    let dropping = Rc::clone(state);
+    let drop_view = list_view.clone();
+    target.connect_drop(move |_, value, x, y| {
+        mark_drop_row(&marked, None);
+        let Ok(from) = value.get::<String>() else {
+            return false;
+        };
+        let (dir, _) = drop_landing(&dropping, &drop_view, x, y);
+        let Some(to) = moves::destination(&from, &dir) else {
+            return false;
+        };
+        // The move rebuilds the tree, freeing the row being dropped on, and GTK
+        // parks focus on the first row once the drag is torn down, which would
+        // land on top of the selection the move asks for. Both want the drag
+        // finished first, and an idle turn is not late enough.
+        let moving = Rc::clone(&dropping);
+        gtk::glib::timeout_add_local_once(Duration::from_millis(DROP_SETTLE_MS), move || {
+            relocate(&moving, Path::new(&from), Path::new(&to));
+        });
+        true
+    });
+    list_view.add_controller(target);
+}
+
+/// Where a drop at list-local (`x`, `y`) lands, and the row to mark for it.
+///
+/// A folder row is itself; a file row is the folder holding it, so dropping onto
+/// a note means "put it beside this one". Empty space is the vault root.
+fn drop_landing(
+    state: &Rc<State>,
+    list_view: &ListView,
+    x: f64,
+    y: f64,
+) -> (String, Option<gtk::Widget>) {
+    let Some(widget) = row_widget_at(list_view, x, y) else {
+        return (String::new(), None);
+    };
+    let Some(rel) = row_path(Some(&widget)) else {
+        return (String::new(), None);
+    };
+    let dir = if is_file_node(state, &rel) {
+        rel.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_owned())
+    } else {
+        rel
+    };
+    (dir, Some(widget))
+}
+
+/// Moves the drop highlight onto `row`, taking it off whatever wore it before.
+fn mark_drop_row(marked: &Rc<RefCell<Option<gtk::Widget>>>, row: Option<&gtk::Widget>) {
+    let mut held = marked.borrow_mut();
+    if held.as_ref() == row {
+        return;
+    }
+    if let Some(old) = held.take() {
+        old.remove_css_class(DROP_HIGHLIGHT);
+    }
+    if let Some(row) = row {
+        row.add_css_class(DROP_HIGHLIGHT);
+        *held = Some(row.clone());
+    }
+}
+
+/// The path being dragged, read from a preloading drop target.
+fn dragged_path(target: &gtk::DropTarget) -> Option<String> {
+    target.value()?.get::<String>().ok()
 }
 
 /// Opens a file row or expands/collapses a folder row on activation.
@@ -1342,7 +1807,129 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
     wire_tags(app, state);
     wire_report(app, state);
     wire_git(app, state);
+    wire_settings(app, state);
+    wire_font_size(app, state);
     wire_editor_escape(state);
+}
+
+/// Install the font size shortcuts: Ctrl and plus or minus, and Ctrl+scroll.
+///
+/// One size serves the editor and the preview, so a note reads the same either
+/// way and stepping it never puts the two panes out of step.
+fn wire_font_size(app: &Application, state: &Rc<State>) {
+    for (name, up, accels) in [
+        ("font-bigger", true, ["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"]),
+        (
+            "font-smaller",
+            false,
+            ["<Primary>minus", "<Primary>underscore", "<Primary>KP_Subtract"],
+        ),
+    ] {
+        let action = gio::SimpleAction::new(name, None);
+        let stepping = Rc::clone(state);
+        action.connect_activate(move |_, _| step_font_size(&stepping, up));
+        app.add_action(&action);
+        app.set_accels_for_action(&format!("app.{name}"), &accels);
+    }
+
+    // Ctrl with the wheel, over the editor or the preview alike, so the pane
+    // under the pointer never has to be the one that owns the shortcut.
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let scrolling = Rc::clone(state);
+    let carried = Cell::new(0.0);
+    scroll.connect_scroll(move |controller, _, delta| {
+        if !controller
+            .current_event_state()
+            .contains(gdk::ModifierType::CONTROL_MASK)
+        {
+            return gtk::glib::Propagation::Proceed;
+        }
+        let (steps, remainder) = appearance::scroll_steps(carried.get(), delta);
+        carried.set(remainder);
+        for _ in 0..steps.abs() {
+            step_font_size(&scrolling, steps < 0);
+        }
+        gtk::glib::Propagation::Stop
+    });
+    state.overlay.add_controller(scroll);
+}
+
+/// Shows the size in the status bar while it differs from the theme's own, so
+/// there is always a way back from a stray Ctrl+scroll.
+fn refresh_size_indicator(state: &Rc<State>) {
+    let chosen = state.config.borrow().appearance.font_size;
+    let Some(chosen) = chosen else {
+        state.size.set_visible(false);
+        return;
+    };
+    let theme_size = state
+        .theme_file
+        .borrow()
+        .resolve(state.theme.borrow().mode)
+        .map(|bare| bare.typography.font_size);
+    if theme_size.is_ok_and(|size| size == chosen) {
+        state.size.set_visible(false);
+        return;
+    }
+    state.size.set_label(&format!("{chosen}px \u{21ba}"));
+    state.size.set_visible(true);
+}
+
+/// Puts the font size back to whatever the theme asks for.
+fn reset_font_size(state: &Rc<State>) {
+    set_appearance(state, |look| look.font_size = None);
+    let now = state.theme.borrow().typography.font_size;
+    say(state, &format!("Font size back to {now}"));
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_size(now);
+    }
+}
+
+/// Nudges the shared font size one point, and remembers it.
+fn step_font_size(state: &Rc<State>, up: bool) {
+    let now = state.theme.borrow().typography.font_size;
+    let next = appearance::step(now, up);
+    if next == now {
+        return;
+    }
+    set_appearance(state, |look| look.font_size = Some(next));
+    say(state, &format!("Font size {next}"));
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_size(next);
+    }
+}
+
+/// Install the settings action, which the rail cogwheel also triggers.
+fn wire_settings(app: &Application, state: &Rc<State>) {
+    let action = gio::SimpleAction::new("settings", None);
+    let opening = Rc::clone(state);
+    action.connect_activate(move |_, _| open_settings(&opening));
+    app.add_action(&action);
+    app.set_accels_for_action("app.settings", &["<Primary>comma"]);
+
+    let open_vault_action = gio::SimpleAction::new("open-vault", None);
+    let picking = Rc::clone(state);
+    open_vault_action.connect_activate(move |_, _| pick_vault(&picking));
+    app.add_action(&open_vault_action);
+    app.set_accels_for_action("app.open-vault", &["<Primary><Shift>o"]);
+
+    let reset = gio::SimpleAction::new("font-reset", None);
+    let resetting = Rc::clone(state);
+    reset.connect_activate(move |_, _| reset_font_size(&resetting));
+    app.add_action(&reset);
+    app.set_accels_for_action("app.font-reset", &["<Primary>0"]);
+
+    let sheet = gio::SimpleAction::new("keys", None);
+    let showing = Rc::clone(state);
+    sheet.connect_activate(move |_, _| open_keysheet(&showing));
+    app.add_action(&sheet);
+    // Ctrl+H rather than Ctrl+K, which insert link is keeping.
+    app.set_accels_for_action("app.keys", &["<Primary>h"]);
+
+    let clicked = Rc::clone(state);
+    state.size.connect_clicked(move |_| reset_font_size(&clicked));
+    refresh_size_indicator(state);
 }
 
 /// Install the git actions and the status-bar segment behind them.
@@ -1645,7 +2232,7 @@ fn show_tagged_notes(state: &Rc<State>, tag: &str) {
 type LateState = Rc<RefCell<Option<Rc<State>>>>;
 
 /// Builds the four-page sidebar and the cell its rows activate through.
-fn build_sidebar(tree: &ScrolledWindow, accent: &str) -> (Sidebar, LateState) {
+fn build_sidebar(tree: &gtk::Box, accent: &str) -> (Sidebar, LateState) {
     let opened: LateState = Rc::new(RefCell::new(None));
 
     let target = Rc::clone(&opened);
@@ -1731,6 +2318,121 @@ struct Sidebar {
     report: Rc<drill::Panel>,
     git: Rc<git_panel::Panel>,
     stack: Stack,
+}
+
+/// Builds the rail, acting through the state once it exists.
+fn build_rail(opened: &LateState) -> Rc<rail::Rail> {
+    let toggling = Rc::clone(opened);
+    let opening = Rc::clone(opened);
+    rail::Rail::new(
+        move |wanted| {
+            let state = toggling.borrow().clone();
+            if let Some(state) = state {
+                state.sidebar_stack.set_visible(wanted);
+            }
+        },
+        move || {
+            let state = opening.borrow().clone();
+            if let Some(state) = state {
+                open_settings(&state);
+            }
+        },
+    )
+}
+
+/// Opens the settings window, or closes it when it is already open.
+///
+/// The same key both ways, like every other panel jotter opens.
+/// Shows the keybinding sheet, or closes it when it is already up.
+///
+/// The labels come from GTK rather than a written list, so the sheet says what is
+/// bound now even if a binding moved.
+fn open_keysheet(state: &Rc<State>) {
+    if let Some(window) = state.keysheet.take() {
+        window.close();
+        return;
+    }
+    let Some(parent) = state.overlay.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+    let app = state.app.clone();
+    let sections = keysheet::sections(&|action| accel_label(&app, action));
+    let window = keysheet::open(&parent, &sections);
+
+    let forgetting = Rc::clone(state);
+    window.connect_close_request(move |_| {
+        forgetting.keysheet.replace(None);
+        gtk::glib::Propagation::Proceed
+    });
+    state.keysheet.replace(Some(window));
+}
+
+fn open_settings(state: &Rc<State>) {
+    let open = state.settings.borrow().as_ref().map(|handle| handle.window.clone());
+    if let Some(window) = open {
+        window.close();
+        return;
+    }
+    let Some(parent) = state.overlay.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+
+    let ids: Vec<String> = themes::available()
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    // The theme's own fonts, resolved without the user's overrides on top, so
+    // the window can offer a way back to them.
+    let bare = state
+        .theme_file
+        .borrow()
+        .resolve(state.theme.borrow().mode)
+        .ok();
+    let current = {
+        let theme = state.theme.borrow();
+        let look = &state.config.borrow().appearance;
+        let typography = bare.as_ref().map_or(&theme.typography, |bare| &bare.typography);
+        settings::Current {
+            theme: state.theme_file.borrow().id.clone(),
+            mode: theme.mode,
+            editor_font: settings::Font {
+                theme: typography.editor_font.clone(),
+                chosen: look.editor_font.clone(),
+            },
+            preview_font: settings::Font {
+                theme: typography.preview_font.clone(),
+                chosen: look.preview_font.clone(),
+            },
+            size: theme.typography.font_size,
+        }
+    };
+
+    let changing = Rc::clone(state);
+    let handle = settings::open(&parent, &ids, &current, move |change| match change {
+        settings::Change::Theme(id) => set_theme(&changing, &id),
+        settings::Change::Mode(mode) => set_theme_mode(&changing, mode),
+        settings::Change::EditorFont(name) => {
+            set_appearance(&changing, |look| look.editor_font.clone_from(&name));
+        }
+        settings::Change::Size(size) => {
+            set_appearance(&changing, |look| look.font_size = Some(size));
+        }
+        settings::Change::PreviewFont(name) => {
+            set_appearance(&changing, |look| look.preview_font.clone_from(&name));
+        }
+    });
+    let window = handle.window.clone();
+
+    // An application window, so app accelerators (Ctrl+, among them) reach it.
+    // Without this the dialog is deaf to them and, being modal, so is the parent.
+    window.set_application(Some(&state.app));
+
+    let closing = Rc::clone(state);
+    window.connect_close_request(move |_| {
+        closing.settings.replace(None);
+        gtk::glib::Propagation::Proceed
+    });
+    state.settings.replace(Some(handle));
 }
 
 /// Builds the conflict resolver, acting through the state once it exists.
@@ -2285,6 +2987,8 @@ fn wire_sidebar_toggle(app: &Application, state: &Rc<State>) {
     action.connect_activate(move |_, _| {
         let visible = sidebar_state.sidebar_stack.get_visible();
         sidebar_state.sidebar_stack.set_visible(!visible);
+        // The rail button shows what the tree is doing, however it was toggled.
+        sidebar_state.rail.set_notes_active(!visible);
     });
     app.add_action(&action);
     app.set_accels_for_action("app.toggle-sidebar", &["<Primary>b"]);
@@ -2306,14 +3010,81 @@ fn toggle_theme_mode(state: &Rc<State>) {
         Mode::Dark => Mode::Light,
         Mode::Light => Mode::Dark,
     };
-    let next = match state.theme_file.resolve(next_mode) {
-        Ok(theme) => theme,
+    set_theme_mode(state, next_mode);
+}
+
+/// Switches to `mode`, remembering it for next time.
+fn set_theme_mode(state: &Rc<State>, mode: Mode) {
+    {
+        let mut config = state.config.borrow_mut();
+        config.appearance.mode = Some(appearance::mode_name(mode).to_string());
+        config.save();
+    }
+    let next = {
+        let file = state.theme_file.borrow();
+        match appearance::resolve(&file, &state.config.borrow().appearance) {
+            Ok(theme) => theme,
+            Err(err) => {
+                eprintln!("jotter: could not switch theme mode: {err}");
+                return;
+            }
+        }
+    };
+    apply_theme(state, next);
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_mode(mode);
+    }
+}
+
+/// Loads `id` and applies it, remembering it for next time.
+fn set_theme(state: &Rc<State>, id: &str) {
+    let file = match themes::load(id) {
+        Ok(file) => file,
         Err(err) => {
-            eprintln!("jotter: could not switch theme mode: {err}");
+            eprintln!("jotter: could not load theme {id}: {err}");
+            say(state, &format!("Could not load theme {id}"));
             return;
         }
     };
+    {
+        let mut config = state.config.borrow_mut();
+        config.appearance.theme = Some(id.to_string());
+        config.save();
+    }
+    let next = match appearance::resolve(&file, &state.config.borrow().appearance) {
+        Ok(theme) => theme,
+        Err(err) => {
+            eprintln!("jotter: could not resolve theme {id}: {err}");
+            return;
+        }
+    };
+    *state.theme_file.borrow_mut() = file;
+    apply_theme(state, next);
+}
 
+/// Records an appearance change, saves it, and repaints with it.
+fn set_appearance<F: Fn(&mut config::Appearance)>(state: &Rc<State>, change: F) {
+    {
+        let mut config = state.config.borrow_mut();
+        change(&mut config.appearance);
+        config.save();
+    }
+    let next = {
+        let file = state.theme_file.borrow();
+        match appearance::resolve(&file, &state.config.borrow().appearance) {
+            Ok(theme) => theme,
+            Err(err) => {
+                eprintln!("jotter: could not apply appearance: {err}");
+                return;
+            }
+        }
+    };
+    apply_theme(state, next);
+    refresh_size_indicator(state);
+}
+
+/// Repaints every surface for `next` and keeps it as the active theme.
+fn apply_theme(state: &Rc<State>, next: Theme) {
     apply_chrome_css(&state.chrome_provider, &next);
     state.editor.set_theme(&next);
     state.preview.set_theme(&next);
@@ -2927,13 +3698,16 @@ fn wire_tree_context_menu(state: &Rc<State>, list_view: &ListView) {
 /// Walks up from the picked widget to the row's `TreeExpander`, whose bound
 /// `TreeListRow` carries the node path. A click in empty space yields `None`.
 fn row_at(list_view: &ListView, x: f64, y: f64) -> Option<PathBuf> {
+    row_path(row_widget_at(list_view, x, y).as_ref()).map(PathBuf::from)
+}
+
+/// The row widget under list-local (`x`, `y`), or `None` over empty space.
+fn row_widget_at(list_view: &ListView, x: f64, y: f64) -> Option<gtk::Widget> {
     let list_view_widget: &gtk::Widget = list_view.upcast_ref();
     let mut widget = list_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
     loop {
-        if let Some(expander) = widget.downcast_ref::<TreeExpander>() {
-            let row = expander.list_row()?;
-            let node = row.item().and_downcast::<gtk::StringObject>()?;
-            return Some(PathBuf::from(node.string().as_str()));
+        if widget.is::<TreeExpander>() {
+            return Some(widget);
         }
         if &widget == list_view_widget {
             return None;
@@ -3083,32 +3857,62 @@ fn rename_folder(state: &Rc<State>, rel: &Path, name: &str) {
         return;
     }
     let to = rel.parent().map(Path::to_path_buf).unwrap_or_default().join(name);
-    let moved_current = {
+    relocate(state, rel, &to);
+}
+
+/// Where the open note ended up, when the move took it along.
+fn moved_current(from: &Path, to: &Path, current: Option<&Path>) -> Option<PathBuf> {
+    let tail = current?.strip_prefix(from).ok()?;
+    Some(to.join(tail))
+}
+
+/// Moves a note or a folder to another vault-relative path, rewriting the links
+/// that named it and following the open note if it moved.
+///
+/// A rename and a drag into another folder are one operation: the path changes,
+/// so path-form links break, and a bare `[[stem]]` breaks too when the name did.
+fn relocate(state: &Rc<State>, from: &Path, to: &Path) {
+    if from.as_os_str().is_empty() || to.as_os_str().is_empty() || from == to {
+        return;
+    }
+    // A rewrite goes straight to disk, so unsaved edits have to land first.
+    save_if_dirty(state);
+
+    let done = {
         let session_ref = state.session.borrow();
         let Some(session) = session_ref.as_ref() else {
             return;
         };
-        if let Err(err) = session.vault.rename_note(rel, &to) {
-            eprintln!("jotter: could not rename folder {}: {err}", rel.display());
-            return;
+        if session.vault.root().join(to).exists() {
+            None
+        } else {
+            let plan = moves::plan(&session.vault, &session.index, from, to);
+            if let Err(err) = session.vault.rename_note(from, to) {
+                eprintln!("jotter: could not move {}: {err}", from.display());
+                return;
+            }
+            moves::reindex(&session.vault, &session.index, &plan);
+            let rewritten = moves::relink(&session.vault, &session.index, &plan);
+            let current = session.current.borrow().clone();
+            Some((moved_current(from, to, current.as_deref()), rewritten))
         }
-        reindex_moved(session, rel, Some(&to));
-        session
-            .current
-            .borrow()
-            .as_ref()
-            .and_then(|current| current.strip_prefix(rel).ok())
-            .map(|tail| to.join(tail))
     };
+    let Some((followed, rewritten)) = done else {
+        say(state, &format!("{} already exists", to.display()));
+        return;
+    };
+
     refresh_tree(state);
-    match moved_current {
-        // The open note moved with the folder, so the tree follows the note.
-        Some(current) => {
-            load_note(state, &current);
-            select_in_tree(state, &current);
-        }
-        None => select_in_tree(state, &to),
+    if let Some(current) = followed {
+        // The open note moved, so the editor and the tree follow it there.
+        load_note(state, &current);
+        select_in_tree(state, &current);
+    } else {
+        // The rewrite may have touched the note on screen.
+        reload_current_note(state);
+        select_in_tree(state, to);
     }
+    say(state, &moves::message(from, to, rewritten.len()));
 }
 
 /// Moves a folder to the trash with everything under it.
@@ -3239,32 +4043,7 @@ fn rename_note(state: &Rc<State>, rel: &Path, name: &str) {
     if to.extension().is_none() {
         to.set_extension("md");
     }
-    let was_current;
-    {
-        let session_ref = state.session.borrow();
-        let Some(session) = session_ref.as_ref() else {
-            return;
-        };
-        match session.vault.rename_note(rel, &to) {
-            Ok(()) => {
-                let _ = vault_session::deindex_note(&session.index, rel);
-                let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, &to);
-            }
-            Err(err) => {
-                eprintln!("jotter: could not rename {}: {err}", rel.display());
-                return;
-            }
-        }
-        // If the renamed note was open, follow it to its new path.
-        was_current = session.current.borrow().as_deref() == Some(rel);
-    }
-    if was_current {
-        load_note(state, &to);
-    }
-    refresh_tree(state);
-    if was_current {
-        select_in_tree(state, &to);
-    }
+    relocate(state, rel, &to);
 }
 
 /// Moves the note at `rel` to the vault trash and drops it from the index.
@@ -3321,6 +4100,19 @@ fn stem_of(path: &Path) -> String {
 /// Uses a plain transient `gtk::Window` (the old `gtk::Dialog` is deprecated since
 /// GTK 4.10). Enter or the OK button confirms, Escape or Cancel dismisses.
 fn confirm<F: Fn() + 'static>(state: &Rc<State>, question: &str, action: &str, on_yes: F) {
+    confirm_tone(state, question, action, true, on_yes, || {});
+}
+
+/// A confirmation whose button is styled by what it does: red for a deletion,
+/// accented for something merely consequential.
+fn confirm_tone<F: Fn() + 'static, N: Fn() + 'static>(
+    state: &Rc<State>,
+    question: &str,
+    action: &str,
+    destructive: bool,
+    on_yes: F,
+    on_no: N,
+) {
     let parent = state.sidebar.root().and_downcast::<gtk::Window>();
     let dialog = gtk::Window::builder()
         .title("Confirm")
@@ -3348,19 +4140,37 @@ fn confirm<F: Fn() + 'static>(state: &Rc<State>, question: &str, action: &str, o
     buttons.set_halign(gtk::Align::End);
     let cancel = gtk::Button::with_label("Cancel");
     let go = gtk::Button::with_label(action);
-    go.add_css_class("destructive-action");
+    go.add_css_class(if destructive {
+        "destructive-action"
+    } else {
+        "suggested-action"
+    });
     buttons.append(&cancel);
     buttons.append(&go);
     content.append(&buttons);
     dialog.set_child(Some(&content));
 
+    // Answered once, whichever way: the close handler runs `on_no` unless the
+    // action already ran, so Escape and the window's X count as a no.
+    let answered = Rc::new(Cell::new(false));
+
     let go_dialog = dialog.clone();
+    let said_yes = Rc::clone(&answered);
     go.connect_clicked(move |_| {
+        said_yes.set(true);
         on_yes();
         go_dialog.close();
     });
     let cancel_dialog = dialog.clone();
     cancel.connect_clicked(move |_| cancel_dialog.close());
+
+    let refused = Rc::clone(&answered);
+    dialog.connect_close_request(move |_| {
+        if !refused.get() {
+            on_no();
+        }
+        gtk::glib::Propagation::Proceed
+    });
 
     let escape = gtk::EventControllerKey::new();
     let escape_dialog = dialog.clone();
@@ -3496,7 +4306,9 @@ mod tests {
                 assert_eq!(root, tmp.path());
                 assert!(note.is_none());
             }
-            Startup::File(_) => panic!("expected vault startup for a directory arg"),
+            Startup::File(_) | Startup::Pick => {
+                panic!("expected vault startup for a directory arg")
+            }
         }
     }
 
@@ -3509,7 +4321,9 @@ mod tests {
         match resolve_startup(Some(&file.to_string_lossy()), &config) {
             Startup::File(Some(path)) => assert_eq!(path, file),
             Startup::File(None) => panic!("expected the file path, got the sample fallback"),
-            Startup::Vault { .. } => panic!("expected single-file startup, got a vault"),
+            Startup::Vault { .. } | Startup::Pick => {
+                panic!("expected single-file startup, got a vault")
+            }
         }
     }
 
@@ -3517,6 +4331,34 @@ mod tests {
     fn no_arg_no_config_uses_sample() {
         let config = Config::default();
         assert!(matches!(resolve_startup(None, &config), Startup::File(None)));
+    }
+
+    #[test]
+    fn two_known_vaults_ask_rather_than_guess() {
+        let tmp = TempDir::new().unwrap();
+        let one = tmp.path().join("one");
+        let two = tmp.path().join("two");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::create_dir_all(&two).unwrap();
+        let mut config = Config::default();
+        config.push_recent(&one);
+        config.push_recent(&two);
+        assert!(matches!(resolve_startup(None, &config), Startup::Pick));
+    }
+
+    #[test]
+    fn a_remembered_vault_that_has_gone_is_not_offered() {
+        let tmp = TempDir::new().unwrap();
+        let here = tmp.path().join("here");
+        std::fs::create_dir_all(&here).unwrap();
+        let mut config = Config::default();
+        config.push_recent(&here);
+        config.push_recent(&tmp.path().join("deleted-since"));
+        // One survivor, so it opens rather than asking.
+        match resolve_startup(None, &config) {
+            Startup::Vault { root, .. } => assert_eq!(root, here),
+            _ => panic!("expected the surviving vault"),
+        }
     }
 
     #[test]
@@ -3531,7 +4373,9 @@ mod tests {
                 assert_eq!(root, tmp.path());
                 assert_eq!(note.as_deref(), Some(Path::new("a.md")));
             }
-            Startup::File(_) => panic!("expected a recent vault, got single-file startup"),
+            Startup::File(_) | Startup::Pick => {
+                panic!("expected a recent vault, got single-file startup")
+            }
         }
     }
 }

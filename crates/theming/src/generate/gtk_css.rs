@@ -28,12 +28,17 @@ paned > separator {{\n  background-color: {overlay};\n  background-image: none;\
 .sidebar listview > row {{\n  border-radius: {r}px;\n  padding: 3px 8px;\n  margin: 1px 6px;\n}}\n\n\
 .sidebar listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .sidebar listview > row:focus-within {{\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.vault-name {{\n  color: {muted};\n  font-size: {small}px;\n  font-weight: bold;\n  padding: 8px 10px 4px 10px;\n}}\n\n\
+.tree-inert {{\n  color: {muted};\n  opacity: 0.55;\n}}\n\n\
 .tree-title {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
 .sidebar listview > row:selected .tree-title {{\n  color: alpha({bg}, 0.7);\n}}\n\n\
+.tree-drop {{\n  box-shadow: inset 0 0 0 2px {accent};\n  border-radius: {r}px;\n}}\n\n\
+.sidebar listview:drop(active), .sidebar listview > row:drop(active) {{\n  box-shadow: none;\n  outline: none;\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .sidebar listview > row:selected:hover {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 button {{\n  background-color: {surface};\n  background-image: none;\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n  padding: 6px 14px;\n}}\n\n\
 button:hover {{\n  background-color: {overlay};\n}}\n\n\
+button:checked {{\n  background-color: {accent};\n  background-image: none;\n  color: {bg};\n  border-color: {accent};\n}}\n\n\
 button.suggested-action {{\n  background-color: {text};\n  background-image: none;\n  color: {bg};\n  border-color: {text};\n}}\n\n\
 button.suggested-action:hover {{\n  background-color: {accent};\n  border-color: {accent};\n  color: {bg};\n}}\n\n\
 button.destructive-action {{\n  background-color: {danger};\n  background-image: none;\n  color: {bg};\n  border-color: {danger};\n}}\n\n\
@@ -47,7 +52,51 @@ entry:focus-within {{\n  border-bottom-color: {accent};\n}}\n\n\
 entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
 row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
-.picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n\
+.picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n",
+            name = self.scheme_name(),
+            bg = c.background,
+            surface = c.surface,
+            overlay = c.overlay,
+            text = c.text,
+            accent = c.accent,
+            border = c.border,
+            danger = c.danger,
+            muted = c.muted,
+            ui_font = t.ui_font,
+            size = t.font_size,
+            small = t.font_size.saturating_sub(1),
+        ) + &self.parts_css()
+    }
+
+    /// The half of the stylesheet that dresses jotter's own widgets, split
+    /// from the general chrome so neither is a wall of text.
+    fn parts_css(&self) -> String {
+        let c = &self.chrome;
+        let t = &self.typography;
+        let r = c.radius;
+        let bw = c.border_width;
+
+        format!(
+            ".rail {{\n  background-color: {bg};\n  padding: 10px 6px;\n}}\n\n\
+.rail-button {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  padding: 10px 4px;\n  min-height: 0;\n  min-width: 0;\n  border-radius: {r}px;\n}}\n\n\
+.rail-button label {{\n  font-family: {editor_font};\n  font-size: {rail_size}px;\n  padding-bottom: 1px;\n  border-bottom: 2px solid transparent;\n}}\n\n\
+.rail-button:hover {{\n  background-color: {overlay};\n  color: {text};\n}}\n\n\
+.rail-button:checked {{\n  background: none;\n  color: {accent};\n}}\n\n\
+.rail-button:checked label {{\n  border-bottom-color: {accent};\n}}\n\n\
+.rail-settings {{\n  padding-left: 3px;\n  padding-right: 6px;\n}}\n\n\
+.font-tick {{\n  color: {accent};\n}}\n\n\
+.font-list {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
+.font-list > row {{\n  padding: 2px 8px;\n  border-radius: {r}px;\n}}\n\n\
+.font-list > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.font-list > row:selected {{\n  background-color: {overlay};\n  color: {text};\n  box-shadow: inset 2px 0 0 0 {accent};\n}}\n\n\
+.settings {{\n  background-color: {bg};\n}}\n\n\
+.settings-label {{\n  color: {muted};\n}}\n\n\
+.settings-close {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {text};\n  padding: 4px 8px;\n  min-height: 0;\n  min-width: 0;\n}}\n\n\
+.settings-close:hover {{\n  background-color: {overlay};\n  border-radius: {r}px;\n}}\n\n\
+.keysheet-heading {{\n  color: {accent};\n  font-size: {small}px;\n  font-weight: bold;\n}}\n\n\
+.keysheet-keys {{\n  color: {muted};\n  font-family: {editor_font};\n  font-size: {small}px;\n}}\n\n\
+.theme-button {{\n  padding: 6px;\n}}\n\n\
+.theme-name {{\n  font-size: {small}px;\n}}\n\n\
 .conflict {{\n  background-color: {bg};\n  padding: 10px 12px;\n}}\n\n\
 .conflict-header {{\n  padding-bottom: 4px;\n  border-bottom: {bw}px solid {overlay};\n}}\n\n\
 .conflict-heading {{\n  font-weight: bold;\n}}\n\n\
@@ -62,6 +111,10 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
 .conflict-body.conflict-resolution, .conflict-body.conflict-resolution text {{\n  background-color: {surface};\n  color: {text};\n}}\n\n\
 .conflict-actions {{\n  padding-top: 4px;\n}}\n\n\
 .conflict-action {{\n  padding: 4px 10px;\n}}\n\n\
+.status-size {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
+.status-size:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
+.size-step {{\n  padding: 2px 10px;\n  min-width: 0;\n}}\n\n\
+.size-value {{\n  font-family: {editor_font};\n}}\n\n\
 .status-git {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {muted};\n  font-family: {editor_font};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
 .status-git:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .status-broken {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {danger};\n  font-size: {small}px;\n  padding: 0 8px;\n  min-height: 0;\n}}\n\n\
@@ -96,7 +149,6 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
 .picker-detail {{\n  color: {muted};\n}}\n\n\
 .picker listview > row:selected .picker-detail {{\n  color: alpha({bg}, 0.65);\n}}\n\n\
 tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n}}\n",
-            name = self.scheme_name(),
             bg = c.background,
             surface = c.surface,
             overlay = c.overlay,
@@ -106,12 +158,11 @@ tooltip {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px s
             border = c.border,
             danger = c.danger,
             muted = c.muted,
-            ui_font = t.ui_font,
             editor_font = t.editor_font,
-            size = t.font_size,
             picker_size = t.font_size + 4,
             small = t.font_size.saturating_sub(1),
             back_size = t.font_size + 1,
+            rail_size = t.font_size + 6,
         )
     }
 }

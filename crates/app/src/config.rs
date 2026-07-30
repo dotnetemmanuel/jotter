@@ -30,6 +30,32 @@ pub struct Config {
     /// Open tree folders (vault-relative), keyed by absolute vault root.
     #[serde(default)]
     pub expanded_folders: BTreeMap<String, Vec<String>>,
+    /// Look and feel, global rather than per vault.
+    #[serde(default)]
+    pub appearance: Appearance,
+}
+
+/// The user's overrides for how jotter looks.
+///
+/// Every field is optional, and absent means "whatever the theme says", so a
+/// config written before this existed keeps behaving exactly as it did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Appearance {
+    /// Theme id, matching a bundled theme or one in the user themes folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Light or dark, as the theme spells it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Font family for the editor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editor_font: Option<String>,
+    /// Font size in pixels, shared by the editor and the rendered preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+    /// Font family for the rendered preview.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_font: Option<String>,
 }
 
 impl Config {
@@ -85,11 +111,6 @@ impl Config {
         self.recent_vaults = push_recent(std::mem::take(&mut self.recent_vaults), key);
     }
 
-    /// The most-recent vault root, if any exists.
-    #[must_use]
-    pub fn most_recent_vault(&self) -> Option<PathBuf> {
-        self.recent_vaults.first().map(PathBuf::from)
-    }
 
     /// Records `rel` as the last-active note for vault `root`.
     pub fn set_last_active(&mut self, root: &Path, rel: &Path) {
@@ -142,12 +163,17 @@ impl Config {
     }
 }
 
-/// The absolute config file path under the user config dir.
-fn config_path() -> PathBuf {
+/// The directory jotter keeps its own files in.
+#[must_use]
+pub fn config_dir() -> PathBuf {
     let mut dir = gtk::glib::user_config_dir();
     dir.push("jotter");
-    dir.push("config.toml");
     dir
+}
+
+/// The absolute config file path under the user config dir.
+fn config_path() -> PathBuf {
+    config_dir().join("config.toml")
 }
 
 /// Pure recents update: prepend `key`, drop an earlier duplicate, cap the length.

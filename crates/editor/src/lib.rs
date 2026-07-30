@@ -31,6 +31,8 @@ pub struct Editor {
     inert_tag: gtk::TextTag,
     /// Byte ranges of the followable links, for the Ctrl+hover cursor.
     link_ranges: Rc<RefCell<Vec<Range<usize>>>>,
+    /// The font rule, reloaded in place when the theme or the size changes.
+    font_provider: gtk::CssProvider,
 }
 
 /// Maps byte offsets in a buffer to the (line, byte-in-line) pairs GTK wants.
@@ -90,7 +92,8 @@ impl Editor {
         view.set_monospace(true);
         view.set_wrap_mode(gtk::WrapMode::WordChar);
 
-        apply_font(&view, theme);
+        let font_provider = gtk::CssProvider::new();
+        install_font(&view, &font_provider, theme);
 
         let scroller = gtk::ScrolledWindow::builder()
             .hexpand(true)
@@ -138,6 +141,7 @@ impl Editor {
             broken_link_tag,
             inert_tag,
             link_ranges,
+            font_provider,
         }
     }
 
@@ -282,11 +286,13 @@ impl Editor {
             .scroll_to_mark(&self.buffer.get_insert(), 0.0, true, 0.0, 0.3);
     }
 
-    /// Re-apply a theme (for example after a light/dark switch): re-register and
-    /// set the style scheme on the buffer. The font is mode-independent, so it is
-    /// left as applied at construction to avoid stacking display providers.
+    /// Re-apply a theme: the buffer's style scheme, the link tags, and the font.
+    ///
+    /// The font rule is reloaded on the provider installed at construction, so a
+    /// size change lands live without registering another provider.
     pub fn set_theme(&self, theme: &Theme) {
         register_and_apply_scheme(&self.buffer, theme);
+        apply_font(&self.font_provider, theme);
         self.link_tag.set_foreground(Some(&theme.editor.syntax.link));
         self.broken_link_tag
             .set_foreground(Some(&theme.preview.muted));
@@ -514,26 +520,32 @@ fn register_and_apply_scheme(buffer: &sourceview5::Buffer, theme: &Theme) {
 /// CSS class the editor view carries so its font CSS targets only this widget.
 const EDITOR_CSS_CLASS: &str = "jotter-editor-view";
 
-/// Apply the editor font family and size via a display-wide `CssProvider` scoped
-/// by a css class on the view. We use CSS (not just monospace) so the theme
-/// `editor_font` and `font_size` win. The per-widget `style_context` provider is
-/// deprecated since GTK 4.10, so we register on the display and scope by class.
-fn apply_font(view: &sourceview5::View, theme: &Theme) {
+/// Install the font provider once, scoped to the view by a css class.
+///
+/// CSS rather than a font property so the theme's `editor_font` and `font_size`
+/// win, and one provider reloaded in place rather than a new one per change:
+/// the per-widget `style_context` provider is deprecated since GTK 4.10, and
+/// stacking display providers would leave every old size still registered.
+fn install_font(view: &sourceview5::View, provider: &gtk::CssProvider, theme: &Theme) {
     view.add_css_class(EDITOR_CSS_CLASS);
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+    apply_font(provider, theme);
+}
+
+/// Borrow helper, kept so the call above reads in one line.
+/// Reload the font rule, which changes the editor's font family and size live.
+fn apply_font(provider: &gtk::CssProvider, theme: &Theme) {
     let t = &theme.typography;
-    let css = format!(
+    provider.load_from_string(&format!(
         "textview.{class} {{ font-family: {family}; font-size: {size}px; }}",
         class = EDITOR_CSS_CLASS,
         family = t.editor_font,
         size = t.font_size,
-    );
-    let provider = gtk::CssProvider::new();
-    provider.load_from_string(&css);
-    if let Some(display) = gtk::gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
+    ));
 }

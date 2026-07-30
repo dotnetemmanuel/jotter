@@ -1,6 +1,5 @@
 ---
 source: crates/theming/tests/generators.rs
-assertion_line: 44
 expression: "resolve(\"event-horizon\", Mode::Dark).to_gtk_css()"
 ---
 /* Event Horizon dark */
@@ -56,6 +55,18 @@ paned > separator {
   box-shadow: inset 2px 0 0 0 #ee64ac;
 }
 
+.vault-name {
+  color: #6c6f93;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 8px 10px 4px 10px;
+}
+
+.tree-inert {
+  color: #6c6f93;
+  opacity: 0.55;
+}
+
 .tree-title {
   color: #6c6f93;
   font-size: 14px;
@@ -63,6 +74,16 @@ paned > separator {
 
 .sidebar listview > row:selected .tree-title {
   color: alpha(#1c1e26, 0.7);
+}
+
+.tree-drop {
+  box-shadow: inset 0 0 0 2px #ee64ac;
+  border-radius: 3px;
+}
+
+.sidebar listview:drop(active), .sidebar listview > row:drop(active) {
+  box-shadow: none;
+  outline: none;
 }
 
 .sidebar listview > row:selected {
@@ -87,6 +108,13 @@ button {
 
 button:hover {
   background-color: #2e303e;
+}
+
+button:checked {
+  background-color: #ee64ac;
+  background-image: none;
+  color: #1c1e26;
+  border-color: #ee64ac;
 }
 
 button.suggested-action {
@@ -178,6 +206,115 @@ popover > contents {
   background-color: alpha(#1c1e26, 0.45);
 }
 
+.rail {
+  background-color: #1c1e26;
+  padding: 10px 6px;
+}
+
+.rail-button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #6c6f93;
+  padding: 10px 4px;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 3px;
+}
+
+.rail-button label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 21px;
+  padding-bottom: 1px;
+  border-bottom: 2px solid transparent;
+}
+
+.rail-button:hover {
+  background-color: #2e303e;
+  color: #fadad1;
+}
+
+.rail-button:checked {
+  background: none;
+  color: #ee64ac;
+}
+
+.rail-button:checked label {
+  border-bottom-color: #ee64ac;
+}
+
+.rail-settings {
+  padding-left: 3px;
+  padding-right: 6px;
+}
+
+.font-tick {
+  color: #ee64ac;
+}
+
+.font-list {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.font-list > row {
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.font-list > row:hover {
+  background-color: #2e303e;
+}
+
+.font-list > row:selected {
+  background-color: #2e303e;
+  color: #fadad1;
+  box-shadow: inset 2px 0 0 0 #ee64ac;
+}
+
+.settings {
+  background-color: #1c1e26;
+}
+
+.settings-label {
+  color: #6c6f93;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #fadad1;
+  padding: 4px 8px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.settings-close:hover {
+  background-color: #2e303e;
+  border-radius: 3px;
+}
+
+.keysheet-heading {
+  color: #ee64ac;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.keysheet-keys {
+  color: #6c6f93;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+}
+
+.theme-button {
+  padding: 6px;
+}
+
+.theme-name {
+  font-size: 14px;
+}
+
 .conflict {
   background-color: #1c1e26;
   padding: 10px 12px;
@@ -244,6 +381,30 @@ popover > contents {
 
 .conflict-action {
   padding: 4px 10px;
+}
+
+.status-size {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #6c6f93;
+  font-size: 14px;
+  padding: 0 8px;
+  min-height: 0;
+}
+
+.status-size:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.size-step {
+  padding: 2px 10px;
+  min-width: 0;
+}
+
+.size-value {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
 }
 
 .status-git {

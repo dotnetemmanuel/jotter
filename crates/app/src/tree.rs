@@ -12,13 +12,33 @@ use gtk::gio;
 
 use jotter_vault::is_ignored_component;
 
+/// What a tree row is, which decides whether it can be opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A folder, which expands.
+    Dir,
+    /// A markdown file, which opens.
+    Note,
+    /// Anything else: shown so a folder of PDFs does not look empty, but dimmed
+    /// and inert, because jotter has nothing to do with it.
+    Other,
+}
+
 /// One directory entry discovered when scanning a folder for tree children.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     /// The single name (no path), for display and sorting.
     pub name: String,
-    /// True for a directory, false for a `.md` file.
-    pub is_dir: bool,
+    /// What the row is.
+    pub kind: Kind,
+}
+
+impl Entry {
+    /// Whether this row is a folder, for sorting and expansion.
+    #[must_use]
+    pub fn is_dir(&self) -> bool {
+        self.kind == Kind::Dir
+    }
 }
 
 /// Scans one directory level under `root` at vault-relative `rel`, returning the
@@ -42,18 +62,24 @@ pub fn scan_children(root: &Path, rel: &Path) -> Vec<Entry> {
         if is_ignored_component(&name) {
             continue;
         }
-        let is_dir = item.file_type().is_ok_and(|t| t.is_dir());
-        // Keep folders (they may hold notes) and markdown files; drop other files.
-        if is_dir || is_markdown_name(&name) {
-            entries.push(Entry { name, is_dir });
-        }
+        // Everything not ignored is listed: a folder holding only PDFs would
+        // otherwise look empty, which is worse than showing what is in it.
+        let kind = if item.file_type().is_ok_and(|t| t.is_dir()) {
+            Kind::Dir
+        } else if is_markdown_name(&name) {
+            Kind::Note
+        } else {
+            Kind::Other
+        };
+        entries.push(Entry { name, kind });
     }
     sort_entries(&mut entries);
     entries
 }
 
 /// True if `name` ends in a case-insensitive `.md` extension.
-fn is_markdown_name(name: &str) -> bool {
+#[must_use]
+pub fn is_markdown_name(name: &str) -> bool {
     Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
@@ -62,7 +88,7 @@ fn is_markdown_name(name: &str) -> bool {
 
 /// Orders entries: directories before files, then case-insensitive by name.
 pub fn sort_entries(entries: &mut [Entry]) {
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
+    entries.sort_by(|a, b| match (a.is_dir(), b.is_dir()) {
         (true, false) => Ordering::Less,
         (false, true) => Ordering::Greater,
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
@@ -128,15 +154,15 @@ pub fn label_for(rel: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{Entry, join_rel, label_for, scan_children, sort_entries};
+    use super::{Entry, Kind, join_rel, label_for, scan_children, sort_entries};
     use std::path::Path;
     use tempfile::TempDir;
 
     fn dir(name: &str) -> Entry {
-        Entry { name: name.into(), is_dir: true }
+        Entry { name: name.into(), kind: Kind::Dir }
     }
     fn file(name: &str) -> Entry {
-        Entry { name: name.into(), is_dir: false }
+        Entry { name: name.into(), kind: Kind::Note }
     }
 
     #[test]
@@ -169,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_skips_ignored_and_non_markdown() {
+    fn scan_lists_everything_but_the_ignored_names() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         std::fs::write(root.join("keep.md"), "x").unwrap();
@@ -182,8 +208,10 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                Entry { name: "sub".into(), is_dir: true },
-                Entry { name: "keep.md".into(), is_dir: false },
+                Entry { name: "sub".into(), kind: Kind::Dir },
+                Entry { name: "keep.md".into(), kind: Kind::Note },
+                // Listed, not hidden: a folder of PDFs must not look empty.
+                Entry { name: "skip.txt".into(), kind: Kind::Other },
             ]
         );
     }
