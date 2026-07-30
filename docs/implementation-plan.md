@@ -493,7 +493,9 @@ the planned Ctrl+G chords went with the separate stage and push actions).
 
 ## Startup sequence (implement in phase 2, complete by phase 5)
 
-1. Parse CLI args (`jotter [vault_path]`). No arg -> recent-vaults picker.
+1. Parse CLI args (`jotter [vault_path]`). No arg reopens the most recent vault
+   still on disk; the picker moved to Ctrl+Shift+O once daily driving showed a
+   question on every launch answers itself the same way every time.
 2. Open the SQLite index; create and migrate if missing.
 3. Compare mtimes to the index; reindex changed files in the background.
 4. Open the last-active note.

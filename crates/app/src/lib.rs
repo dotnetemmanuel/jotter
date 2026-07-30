@@ -302,8 +302,6 @@ fn reuse_window(state: &Rc<State>, path: Option<&str>) {
 enum Startup {
     /// Open `root` as a vault, restoring `note` (vault-relative) if present.
     Vault { root: PathBuf, note: Option<PathBuf> },
-    /// Ask which of the known vaults to open.
-    Pick,
     /// Open a single markdown file (no sidebar). `None` means the built-in sample.
     File(Option<PathBuf>),
 }
@@ -311,8 +309,10 @@ enum Startup {
 /// Resolves the CLI arg plus config into a concrete startup target.
 ///
 /// A directory arg opens a vault. A file arg opens that file. No arg reopens the
-/// most-recent vault (with its last-active note) if config has one, else the
-/// built-in sample.
+/// most-recent vault still on disk (with its last-active note), else the
+/// built-in sample. Daily use launches with no argument, so a bare start goes
+/// straight back to work; the picker stays behind `Ctrl+Shift+O` for the times
+/// switching is actually wanted.
 fn resolve_startup(arg: Option<&str>, config: &Config) -> Startup {
     if let Some(arg) = arg {
         let path = PathBuf::from(arg);
@@ -322,16 +322,12 @@ fn resolve_startup(arg: Option<&str>, config: &Config) -> Startup {
         }
         return Startup::File(Some(path));
     }
-    // More than one vault to choose from is a question, not a guess; a single
-    // one is not worth asking about.
-    let known = vaults::known(&config.recent_vaults);
-    match known.len() {
-        0 => Startup::File(None),
-        1 => Startup::Vault {
-            note: config.last_active_for(&known[0].path),
-            root: known[0].path.clone(),
+    match vaults::known(&config.recent_vaults).first() {
+        Some(vault) => Startup::Vault {
+            note: config.last_active_for(&vault.path),
+            root: vault.path.clone(),
         },
-        _ => Startup::Pick,
+        None => Startup::File(None),
     }
 }
 
@@ -445,12 +441,6 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     match startup {
         Startup::Vault { root, note } => open_vault(&state, &root, note.as_deref()),
         Startup::File(path) => open_single_file(&state, path.as_deref()),
-        Startup::Pick => {
-            open_single_file(&state, None);
-            let picking = Rc::clone(&state);
-            // After the window exists: the picker is an overlay on it.
-            gtk::glib::idle_add_local_once(move || pick_vault(&picking));
-        }
     }
 
     wire_actions(app, &state);
@@ -4326,9 +4316,7 @@ mod tests {
                 assert_eq!(root, tmp.path());
                 assert!(note.is_none());
             }
-            Startup::File(_) | Startup::Pick => {
-                panic!("expected vault startup for a directory arg")
-            }
+            Startup::File(_) => panic!("expected vault startup for a directory arg"),
         }
     }
 
@@ -4341,9 +4329,7 @@ mod tests {
         match resolve_startup(Some(&file.to_string_lossy()), &config) {
             Startup::File(Some(path)) => assert_eq!(path, file),
             Startup::File(None) => panic!("expected the file path, got the sample fallback"),
-            Startup::Vault { .. } | Startup::Pick => {
-                panic!("expected single-file startup, got a vault")
-            }
+            Startup::Vault { .. } => panic!("expected single-file startup, got a vault"),
         }
     }
 
@@ -4354,7 +4340,7 @@ mod tests {
     }
 
     #[test]
-    fn two_known_vaults_ask_rather_than_guess() {
+    fn two_known_vaults_reopen_the_most_recent() {
         let tmp = TempDir::new().unwrap();
         let one = tmp.path().join("one");
         let two = tmp.path().join("two");
@@ -4363,7 +4349,11 @@ mod tests {
         let mut config = Config::default();
         config.push_recent(&one);
         config.push_recent(&two);
-        assert!(matches!(resolve_startup(None, &config), Startup::Pick));
+        // A bare launch is daily use: go back to work, do not ask.
+        match resolve_startup(None, &config) {
+            Startup::Vault { root, .. } => assert_eq!(root, two),
+            Startup::File(_) => panic!("expected the most recent vault"),
+        }
     }
 
     #[test]
@@ -4377,7 +4367,7 @@ mod tests {
         // One survivor, so it opens rather than asking.
         match resolve_startup(None, &config) {
             Startup::Vault { root, .. } => assert_eq!(root, here),
-            _ => panic!("expected the surviving vault"),
+            Startup::File(_) => panic!("expected the surviving vault"),
         }
     }
 
@@ -4393,9 +4383,7 @@ mod tests {
                 assert_eq!(root, tmp.path());
                 assert_eq!(note.as_deref(), Some(Path::new("a.md")));
             }
-            Startup::File(_) | Startup::Pick => {
-                panic!("expected a recent vault, got single-file startup")
-            }
+            Startup::File(_) => panic!("expected a recent vault, got single-file startup"),
         }
     }
 }
