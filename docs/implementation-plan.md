@@ -501,6 +501,15 @@ the planned Ctrl+G chords went with the separate stage and push actions).
 6. Start the git status poller (30s plus on save).
 UI must be interactive before indexing finishes.
 
+jotter is one window, and a launch while it is already running reaches that
+window rather than opening a second: it is presented, and a vault path on the
+command line is opened in it, which is the same switch `Ctrl+Shift+O` does. Two
+windows in one process cannot work as the app is built, because every action
+lives on the `Application` and a second `build_ui` rebinds them all to the newer
+window, leaving renames acting on the wrong one and the vault watched twice.
+That needs `HANDLES_COMMAND_LINE`, so the argument arrives through the command
+line rather than being read out of the environment.
+
 ## Definition of done for v1
 
 Phases 0 through 5 complete, each acceptance block green, warnings-as-errors clean,

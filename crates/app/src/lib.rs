@@ -236,15 +236,66 @@ struct State {
 /// Returns the process exit code from `gtk::Application::run`.
 #[must_use]
 pub fn run() -> gtk::glib::ExitCode {
-    let app = Application::builder().application_id(APP_ID).build();
+    // Handling the command line ourselves is what lets a second launch reach the
+    // window that is already open, carrying its path with it.
+    let app = Application::builder()
+        .application_id(APP_ID)
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .build();
 
-    // First positional arg after the program name, if any, is a vault or file path.
-    let path_arg: Rc<Option<String>> = Rc::new(std::env::args().nth(1));
+    // jotter is one window, and switching vaults inside it is a first-class
+    // action, so a second launch hands its path to that window rather than
+    // building a second one: two windows in one process would rebind every
+    // action to the newer of them and watch the vault twice.
+    let open: Rc<RefCell<Option<Rc<State>>>> = Rc::new(RefCell::new(None));
+    app.connect_command_line(move |app, cmdline| {
+        let path = launch_path(cmdline);
+        let running = open.borrow().clone();
+        match running {
+            Some(state) => reuse_window(&state, path.as_deref()),
+            None => *open.borrow_mut() = build_ui(app, path.as_deref()),
+        }
+        gtk::glib::ExitCode::SUCCESS
+    });
 
-    app.connect_activate(move |app| build_ui(app, path_arg.as_ref().as_deref()));
+    // The real argv, because with HANDLES_COMMAND_LINE the path arrives through
+    // the command line rather than being read from the environment: that is how a
+    // launch reaches an instance that is already running.
+    app.run()
+}
 
-    // GTK owns args itself; passing an empty slice avoids double-parsing our path.
-    app.run_with_args::<&str>(&[])
+/// The first positional argument of a launch, a vault or a file path.
+fn launch_path(cmdline: &gio::ApplicationCommandLine) -> Option<String> {
+    cmdline
+        .arguments()
+        .get(1)
+        .and_then(|arg| arg.to_str().map(str::to_owned))
+}
+
+/// Brings the open window forward, switching vaults if the launch named one.
+fn reuse_window(state: &Rc<State>, path: Option<&str>) {
+    if let Some(window) = state.overlay.root().and_downcast::<gtk::Window>() {
+        window.present();
+    }
+    let Some(path) = path else {
+        return;
+    };
+    let Ok(root) = std::fs::canonicalize(path) else {
+        say(state, &format!("No such path: {path}"));
+        return;
+    };
+    if !root.is_dir() {
+        open_single_file(state, Some(&root));
+        return;
+    }
+    let already = state
+        .session
+        .borrow()
+        .as_ref()
+        .is_some_and(|session| session.vault.root() == root);
+    if !already {
+        open_vault(state, &root, None);
+    }
 }
 
 /// What the app should open, resolved from the CLI arg and saved config.
@@ -306,11 +357,9 @@ fn install_chrome_css(theme: &Theme) -> CssProvider {
 }
 
 /// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
-fn build_ui(app: &Application, path_arg: Option<&str>) {
+fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     let config = Config::load();
-    let Some((theme_file, theme)) = startup_theme(&config) else {
-        return;
-    };
+    let (theme_file, theme) = startup_theme(&config)?;
 
     let chrome_provider = install_chrome_css(&theme);
 
@@ -423,6 +472,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) {
     state.overlay.set_child(Some(&assemble(&rail.widget(), &paned, &status_bar)));
 
     present_window(app, &state);
+    Some(state)
 }
 
 /// Builds the bottom bar: the status message, and the broken-link count that
@@ -587,11 +637,18 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     };
     state.editor.set_initial_text(&initial);
     state.single_file.replace(path.map(Path::to_path_buf));
+    // After set_initial_text, which counts as a buffer change and would otherwise
+    // leave the title wearing an unsaved marker for a file nobody has touched.
     state.dirty.set(false);
-    // Single-file mode has an empty, non-interactive sidebar.
+    // Single-file mode has an empty, non-interactive sidebar, and coming here from
+    // a vault has to leave the tree and the session behind rather than stale rows.
+    state.session.replace(None);
+    state.sidebar.set_child(None::<&gtk::Widget>);
     state.status.set_text("no vault open");
     state.vault_name.set_visible(false);
     stop_git(state);
+    refresh_backlinks(state);
+    refresh_window_title(state);
 }
 
 /// The row key the vault picker uses for "somewhere else".
