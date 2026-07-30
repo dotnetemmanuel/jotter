@@ -212,6 +212,8 @@ struct State {
     git_panel: Rc<git_panel::Panel>,
     /// The icon rail at the left edge, outside everything Ctrl+B collapses.
     rail: Rc<rail::Rail>,
+    /// The otter in the headerbar, restamped to the text color on theme change.
+    logo: gtk::Image,
     /// The settings window while it is open: the cogwheel toggles it, and a
     /// theme change made elsewhere is reflected back into its controls.
     settings: RefCell<Option<settings::Handle>>,
@@ -331,6 +333,35 @@ fn resolve_startup(arg: Option<&str>, config: &Config) -> Startup {
     }
 }
 
+/// The otter mark, drawn in `currentColor` so it can wear any theme's ink.
+const LOGO_SVG: &str = include_str!("../../../resources/icons/jotter-symbolic.svg");
+
+/// The headerbar logo, stamped in `color`.
+fn logo_image(color: &str) -> gtk::Image {
+    let image = gtk::Image::new();
+    image.set_pixel_size(24);
+    stamp_logo(&image, color);
+    image
+}
+
+/// Re-renders the logo in `color`, which is how it follows the theme: SVG has
+/// `currentColor`, but a rasterized texture has no text color to inherit.
+fn stamp_logo(image: &gtk::Image, color: &str) {
+    let svg = LOGO_SVG.replace("currentColor", color);
+    let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("svg").ok();
+    let pixbuf = loader.and_then(|loader| {
+        // Rendered at twice the display size so a scaled monitor stays crisp.
+        loader.set_size(48, 48);
+        loader.write(svg.as_bytes()).ok()?;
+        loader.close().ok()?;
+        loader.pixbuf()
+    });
+    match pixbuf {
+        Some(pixbuf) => image.set_paintable(Some(&gdk::Texture::for_pixbuf(&pixbuf))),
+        None => eprintln!("jotter: could not render the logo"),
+    }
+}
+
 /// Apply a theme's chrome CSS to the display through `provider`, creating the
 /// display association the first time and restyling in place on later calls.
 fn apply_chrome_css(provider: &CssProvider, theme: &Theme) {
@@ -393,6 +424,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
 
     let startup = resolve_startup(path_arg, &config);
 
+    let logo = logo_image(&theme.chrome.text);
     let state = Rc::new(State {
         editor,
         preview,
@@ -426,6 +458,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         report_panel: pages.report,
         git_panel: pages.git,
         rail: Rc::clone(&rail),
+        logo,
         settings: RefCell::new(None),
         keysheet: RefCell::new(None),
         conflict: Rc::clone(&conflict),
@@ -582,7 +615,9 @@ fn present_window(app: &Application, state: &Rc<State>) {
         .default_height(900)
         .child(&state.overlay)
         .build();
-    window.set_titlebar(Some(&HeaderBar::new()));
+    let bar = HeaderBar::new();
+    bar.pack_start(&state.logo);
+    window.set_titlebar(Some(&bar));
 
     // Settings is a separate toplevel, so a keypress can land here rather than
     // on it. Escape closes it from either window: one state, open or closed.
@@ -3092,6 +3127,7 @@ fn set_appearance<F: Fn(&mut config::Appearance)>(state: &Rc<State>, change: F) 
 /// Repaints every surface for `next` and keeps it as the active theme.
 fn apply_theme(state: &Rc<State>, next: Theme) {
     apply_chrome_css(&state.chrome_provider, &next);
+    stamp_logo(&state.logo, &next.chrome.text);
     state.editor.set_theme(&next);
     // The code colors are per-palette tags, so the old palette's tags must go
     // before the refresh below lays down the new one's.

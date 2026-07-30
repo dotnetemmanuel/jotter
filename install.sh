@@ -23,6 +23,18 @@ install -Dm755 target/release/jotter "$BIN"
 mkdir -p "$ICONS"
 sed "s/currentColor/$ICON_COLOR/g" resources/icons/jotter.svg > "$ICONS/$APP_ID.svg"
 
+# Raster sizes too: some launchers only look at fixed-size directories, and a
+# long-running launcher reads the theme once, so refresh the cache it checks.
+if command -v rsvg-convert >/dev/null; then
+    for size in 48 128 256; do
+        dir="$HOME/.local/share/icons/hicolor/${size}x${size}/apps"
+        mkdir -p "$dir"
+        rsvg-convert -w "$size" -h "$size" "$ICONS/$APP_ID.svg" > "$dir/$APP_ID.png"
+    done
+fi
+command -v gtk-update-icon-cache >/dev/null \
+    && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+
 mkdir -p "$APPS"
 cat > "$APPS/$APP_ID.desktop" <<EOF
 [Desktop Entry]
