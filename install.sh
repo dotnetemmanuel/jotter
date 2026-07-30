@@ -36,12 +36,14 @@ command -v gtk-update-icon-cache >/dev/null \
     && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
 mkdir -p "$APPS"
+# Exec gets the absolute path: the launcher spawns through the systemd user
+# session, whose PATH does not include ~/.local/bin.
 cat > "$APPS/$APP_ID.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=jotter
 Comment=A native GTK4 markdown vault
-Exec=jotter %f
+Exec=$BIN %f
 Icon=$APP_ID
 Terminal=false
 Categories=Utility;TextEditor;
