@@ -2493,7 +2493,7 @@ fn open_keysheet(state: &Rc<State>) {
     };
     let app = state.app.clone();
     let sections = keysheet::sections(&|action| accel_label(&app, action));
-    let window = keysheet::open(&parent, &sections);
+    let window = keysheet::open(&parent, &sections, state.theme.borrow().style);
 
     let forgetting = Rc::clone(state);
     window.connect_close_request(move |_| {
@@ -3264,6 +3264,11 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
 fn restyle(state: &Rc<State>) {
     refresh_vault_name(state);
     rebuild_tree(state);
+    let style = state.theme.borrow().style;
+    state.conflict.set_style(style);
+    if let Some(handle) = state.settings.borrow().as_ref() {
+        handle.show_style(style);
+    }
 }
 
 /// Sets the vault-name label from the open session, styled for the active dress.

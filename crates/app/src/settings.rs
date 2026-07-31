@@ -61,7 +61,6 @@ pub struct Handle {
     /// Reflects the app's current mode back into the controls.
     sync: Rc<dyn Fn(Mode)>,
     /// Reflects the app's current style back into the controls.
-    #[allow(dead_code)] // no outside trigger changes the style yet, unlike mode's Ctrl+T
     sync_style: Rc<dyn Fn(Style)>,
     /// Reflects a font size changed from outside, by Ctrl+plus or the wheel.
     sync_size: Rc<dyn Fn(u32)>,
@@ -74,7 +73,6 @@ impl Handle {
     }
 
     /// Updates the controls to match `style` without reporting a change back.
-    #[allow(dead_code)] // no outside trigger changes the style yet, unlike mode's Ctrl+T
     pub fn show_style(&self, style: Style) {
         (self.sync_style)(style);
     }
@@ -104,7 +102,8 @@ pub fn open<F: Fn(Change) + 'static>(
     let (themes_row, theme_picker) =
         theme_buttons(themes, current_theme, &mode_now, &swatches, &on_change);
 
-    let (modes, light, dark) = mode_buttons(current_mode, &mode_now, &swatches, &quiet, &on_change);
+    let (modes, light, dark) =
+        mode_buttons(current.style, current_mode, &mode_now, &swatches, &quiet, &on_change);
     let (styles, classic, tui) = style_buttons(current.style, &quiet, &on_change);
 
     let grid = gtk::Grid::builder()
@@ -133,7 +132,7 @@ pub fn open<F: Fn(Change) + 'static>(
     grid.attach(&row_label("Mode"), 0, 2, 1, 1);
     grid.attach(&modes, 1, 2, 1, 1);
 
-    let size = size_row(&grid, current.size, &on_change);
+    let (size, size_faces) = size_row(&grid, current.style, current.size, &on_change);
 
     attach_font_rows(&grid, current, &on_change);
 
@@ -207,7 +206,7 @@ pub fn open<F: Fn(Change) + 'static>(
         })
     };
 
-    let sync_style = style_sync(&classic, &tui, &quiet);
+    let sync_style = style_sync(&classic, &tui, &light, &dark, size_faces, &quiet);
 
     let sync_size: Rc<dyn Fn(u32)> = {
         let size = size.clone();
@@ -225,14 +224,15 @@ pub fn open<F: Fn(Change) + 'static>(
 /// The light and dark pair, and the flag that keeps a programmatic toggle from
 /// echoing back as a request to change the mode.
 fn mode_buttons(
+    style: Style,
     current_mode: Mode,
     mode_now: &Rc<Cell<Mode>>,
     swatches: &Rc<RefCell<Vec<gtk::DrawingArea>>>,
     quiet: &Rc<Cell<bool>>,
     on_change: &Rc<impl Fn(Change) + 'static>,
 ) -> (gtk::Box, gtk::ToggleButton, gtk::ToggleButton) {
-    let light = gtk::ToggleButton::with_label("Light");
-    let dark = gtk::ToggleButton::with_label("Dark");
+    let light = gtk::ToggleButton::with_label(&crate::style::button(style, "Light"));
+    let dark = gtk::ToggleButton::with_label(&crate::style::button(style, "Dark"));
     dark.set_group(Some(&light));
     match current_mode {
         Mode::Light => light.set_active(true),
@@ -280,8 +280,8 @@ fn style_buttons(
     quiet: &Rc<Cell<bool>>,
     on_change: &Rc<impl Fn(Change) + 'static>,
 ) -> (gtk::Box, gtk::ToggleButton, gtk::ToggleButton) {
-    let classic = gtk::ToggleButton::with_label("Classic");
-    let tui = gtk::ToggleButton::with_label("TUI");
+    let classic = gtk::ToggleButton::with_label(&crate::style::button(current, "Classic"));
+    let tui = gtk::ToggleButton::with_label(&crate::style::button(current, "TUI"));
     tui.set_group(Some(&classic));
     match current {
         Style::Classic => classic.set_active(true),
@@ -302,11 +302,26 @@ fn style_buttons(
     (row, classic, tui)
 }
 
-/// Reflects a style changed from outside back into the classic and TUI toggles.
-fn style_sync(classic: &gtk::ToggleButton, tui: &gtk::ToggleButton, quiet: &Rc<Cell<bool>>) -> Rc<dyn Fn(Style)> {
+/// Reflects a style changed from outside back into the window's own buttons:
+/// the classic/TUI and light/dark toggles, and the size steps.
+fn style_sync(
+    classic: &gtk::ToggleButton,
+    tui: &gtk::ToggleButton,
+    light: &gtk::ToggleButton,
+    dark: &gtk::ToggleButton,
+    size_faces: Vec<(gtk::Button, String)>,
+    quiet: &Rc<Cell<bool>>,
+) -> Rc<dyn Fn(Style)> {
     let classic = classic.clone();
     let tui = tui.clone();
     let quiet = Rc::clone(quiet);
+    let mut faces: Vec<(gtk::Button, String)> = vec![
+        (classic.clone().upcast::<gtk::Button>(), "Classic".to_string()),
+        (tui.clone().upcast::<gtk::Button>(), "TUI".to_string()),
+        (light.clone().upcast::<gtk::Button>(), "Light".to_string()),
+        (dark.clone().upcast::<gtk::Button>(), "Dark".to_string()),
+    ];
+    faces.extend(size_faces);
     Rc::new(move |style| {
         quiet.set(true);
         match style {
@@ -314,6 +329,9 @@ fn style_sync(classic: &gtk::ToggleButton, tui: &gtk::ToggleButton, quiet: &Rc<C
             Style::Tui => tui.set_active(true),
         }
         quiet.set(false);
+        for (button, label) in &faces {
+            button.set_label(&crate::style::button(style, label));
+        }
     })
 }
 
@@ -427,18 +445,21 @@ fn theme_buttons(
 /// expect and a spin button puts both arrows on one side.
 fn size_row(
     grid: &gtk::Grid,
+    style: Style,
     current: u32,
     on_change: &Rc<impl Fn(Change) + 'static>,
-) -> gtk::Label {
+) -> (gtk::Label, Vec<(gtk::Button, String)>) {
     let value = Rc::new(Cell::new(current));
     let shown = gtk::Label::new(Some(&current.to_string()));
     shown.add_css_class("size-value");
     shown.set_width_chars(2);
 
     let row = gtk::Box::new(Orientation::Horizontal, 8);
+    let mut faces = Vec::new();
     for (label, up) in [("\u{2212}", false), ("+", true)] {
-        let button = gtk::Button::with_label(label);
+        let button = gtk::Button::with_label(&crate::style::button(style, label));
         button.add_css_class("size-step");
+        faces.push((button.clone(), label.to_string()));
         let value = Rc::clone(&value);
         let stepped = shown.clone();
         let on_change = Rc::clone(on_change);
@@ -460,7 +481,7 @@ fn size_row(
 
     grid.attach(&row_label("Font size"), 0, 3, 1, 1);
     grid.attach(&row, 1, 3, 1, 1);
-    shown
+    (shown, faces)
 }
 
 /// The two font rows: the editor's, monospaced only, and the preview's.
