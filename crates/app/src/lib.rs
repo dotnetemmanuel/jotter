@@ -740,6 +740,8 @@ fn pick_vault(state: &Rc<State>) {
     let closing = Rc::clone(state);
     let handle = picker::open(
         &state.overlay,
+        state.theme.borrow().style,
+        |_| "Open vault".to_string(),
         "Open which vault?",
         "",
         source,
@@ -1704,13 +1706,22 @@ fn open_git_row(state: &Rc<State>, path: &str, line: i32) {
 
 /// Applies a status that arrived from the worker.
 fn show_git_status(state: &Rc<State>, status: jotter_git::Status) {
-    state.git.set_label(&git_status::label(&status));
+    let style = state.theme.borrow().style;
+    state.git.set_label(&style::segment(style, &git_status::label(&status)));
     state.git.set_tooltip_text(Some(&git_status::tooltip(&status)));
     state.git.set_visible(true);
     let showing = state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT);
     state.git_last.replace(Some(status));
     if showing {
         refresh_git_page(state);
+    }
+}
+
+/// Re-labels the git segment from the last status read, after a style change.
+fn refresh_git_segment(state: &Rc<State>) {
+    let label = state.git_last.borrow().as_ref().map(git_status::label);
+    if let Some(label) = label {
+        state.git.set_label(&style::segment(state.theme.borrow().style, &label));
     }
 }
 
@@ -2007,7 +2018,8 @@ fn refresh_size_indicator(state: &Rc<State>) {
         state.size.set_visible(false);
         return;
     }
-    state.size.set_label(&format!("{chosen}px \u{21ba}"));
+    let style = state.theme.borrow().style;
+    state.size.set_label(&style::segment(style, &format!("{chosen}px \u{21ba}")));
     state.size.set_visible(true);
 }
 
@@ -2202,7 +2214,8 @@ fn refresh_broken(state: &Rc<State>) {
         state.broken.set_visible(false);
         return;
     };
-    state.broken.set_label(&broken_label(missing.len()));
+    let style = state.theme.borrow().style;
+    state.broken.set_label(&style::segment(style, &broken_label(missing.len())));
     state.broken.set_visible(!missing.is_empty());
 
     if state.sidebar_stack.visible_child_name().as_deref() != Some(PAGE_REPORT) {
@@ -2981,8 +2994,17 @@ fn open_picker(state: &Rc<State>, initial_query: &str) {
     let source_mode = Rc::clone(&in_command_mode);
     let activate = Rc::clone(state);
     let restore = Rc::clone(state);
+    let title = |query: &str| {
+        if commands::command_query(query).is_some() {
+            "Command palette".to_string()
+        } else {
+            "Quick switch".to_string()
+        }
+    };
     let handle = picker::open(
         &state.overlay,
+        state.theme.borrow().style,
+        title,
         "Go to note, or > for commands",
         initial_query,
         move |query| {
@@ -3270,6 +3292,9 @@ fn restyle(state: &Rc<State>) {
     state.report_panel.set_style(style);
     state.git_panel.set_style(style);
     state.backlinks.set_style(style);
+    refresh_git_segment(state);
+    refresh_broken(state);
+    refresh_size_indicator(state);
 }
 
 /// Sets the vault-name label from the open session, styled for the active dress.

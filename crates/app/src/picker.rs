@@ -8,6 +8,7 @@ use gtk::prelude::*;
 use gtk::{
     Align, ListView, Orientation, ScrolledWindow, SignalListItemFactory, SingleSelection, gdk, glib,
 };
+use jotter_theming::Style;
 
 /// A live picker, so the caller can close it or switch it to another mode.
 #[derive(Clone)]
@@ -50,11 +51,16 @@ pub struct Row {
 
 /// Opens the picker over `overlay`, seeded with `initial_query`.
 ///
-/// `source` re-runs on every keystroke and returns the rows to show. `activate`
-/// receives the key of the chosen row, `on_close` runs after the panel goes away
-/// either way, so callers can restore focus.
-pub fn open<S, A, C>(
+/// `source` re-runs on every keystroke and returns the rows to show. `title`
+/// re-runs on every keystroke too, so a picker whose mode can change as the
+/// user types (the switcher turning into the palette) keeps an honest
+/// heading. `activate` receives the key of the chosen row, `on_close` runs
+/// after the panel goes away either way, so callers can restore focus.
+#[allow(clippy::too_many_arguments, reason = "each argument is a distinct collaborator, not a bundle waiting to happen")]
+pub fn open<T, S, A, C>(
     overlay: &gtk::Overlay,
+    style: Style,
+    title: T,
     placeholder: &str,
     initial_query: &str,
     source: S,
@@ -62,6 +68,7 @@ pub fn open<S, A, C>(
     on_close: C,
 ) -> Handle
 where
+    T: Fn(&str) -> String + 'static,
     S: Fn(&str) -> Vec<Row> + 'static,
     A: Fn(&str) + 'static,
     C: Fn() + 'static,
@@ -71,7 +78,8 @@ where
     let activate = Rc::new(activate);
     let on_close = Rc::new(on_close);
 
-    let (panel, entry, selection, list_view) = build_panel(placeholder, initial_query, &rows);
+    let (panel, entry, selection, list_view) =
+        build_panel(style, title, placeholder, initial_query, &rows);
 
     // Covers the window so a click anywhere outside the panel dismisses it.
     let scrim = gtk::Box::new(Orientation::Vertical, 0);
@@ -161,18 +169,23 @@ where
 }
 
 /// The floating panel: query entry above a list, centred near the top.
-fn build_panel(
+fn build_panel<T>(
+    style: Style,
+    title: T,
     placeholder: &str,
     initial_query: &str,
     rows: &Rc<RefCell<Vec<Row>>>,
-) -> (gtk::Box, gtk::Entry, SingleSelection, ListView) {
+) -> (gtk::Box, gtk::Entry, SingleSelection, ListView)
+where
+    T: Fn(&str) -> String + 'static,
+{
     let entry = gtk::Entry::builder()
         .placeholder_text(placeholder)
         .text(initial_query)
         .build();
 
     let selection = SingleSelection::new(Some(gtk::StringList::new(&[])));
-    let list_view = ListView::new(Some(selection.clone()), Some(row_factory(rows)));
+    let list_view = ListView::new(Some(selection.clone()), Some(row_factory(style, rows)));
     list_view.add_css_class("picker-list");
     // A ListView activates on double click by default. In a palette you have
     // already chosen by the time you reach for the mouse.
@@ -191,24 +204,58 @@ fn build_panel(
     panel.set_valign(Align::Start);
     panel.set_margin_top(56);
     panel.set_size_request(560, -1);
-    panel.append(&entry);
+
+    if style == Style::Tui {
+        let heading = gtk::Label::builder()
+            .xalign(0.0)
+            .label(crate::style::heading(style, &title(initial_query)))
+            .build();
+        heading.add_css_class("picker-title");
+        panel.append(&heading);
+
+        let line = gtk::Box::new(Orientation::Horizontal, 0);
+        let prompt = gtk::Label::new(Some(">"));
+        prompt.add_css_class("picker-prompt");
+        // A typed leading `>` is itself the prompt, in command mode; the
+        // chrome supplies one only while the query has not claimed it.
+        prompt.set_visible(!initial_query.starts_with('>'));
+        line.append(&prompt);
+        entry.set_hexpand(true);
+        line.append(&entry);
+        panel.append(&line);
+
+        entry.connect_changed(move |entry| {
+            let text = entry.text();
+            heading.set_text(&crate::style::heading(style, &title(&text)));
+            prompt.set_visible(!text.starts_with('>'));
+        });
+    } else {
+        panel.append(&entry);
+    }
     panel.append(&scroller);
 
     (panel, entry, selection, list_view)
 }
-/// Builds the two-label row factory, reading each row out of `rows` on bind.
-fn row_factory(rows: &Rc<RefCell<Vec<Row>>>) -> SignalListItemFactory {
+/// Builds the row factory, reading each row out of `rows` on bind.
+fn row_factory(style: Style, rows: &Rc<RefCell<Vec<Row>>>) -> SignalListItemFactory {
     let factory = SignalListItemFactory::new();
-    factory.connect_setup(|_, item| {
+    factory.connect_setup(move |_, item| {
         let line = gtk::Box::new(Orientation::Horizontal, 8);
+        let cursor = gtk::Label::builder().xalign(0.0).build();
+        cursor.add_css_class("row-cursor");
+        cursor.set_visible(style == Style::Tui);
+        line.append(&cursor);
         let label = gtk::Label::builder().xalign(0.0).use_markup(true).build();
         let detail = gtk::Label::builder().xalign(0.0).build();
         detail.add_css_class("picker-detail");
         line.append(&label);
         line.append(&detail);
-        item.downcast_ref::<gtk::ListItem>()
-            .expect("list item")
-            .set_child(Some(&line));
+        let item = item.downcast_ref::<gtk::ListItem>().expect("list item");
+        item.set_child(Some(&line));
+
+        item.connect_notify_local(Some("selected"), move |item, _| {
+            cursor.set_text(crate::style::cursor(style, item.is_selected()));
+        });
     });
     factory.connect_bind({
         let rows = Rc::clone(rows);
@@ -217,12 +264,16 @@ fn row_factory(rows: &Rc<RefCell<Vec<Row>>>) -> SignalListItemFactory {
             let Some(line) = item.child().and_downcast::<gtk::Box>() else {
                 return;
             };
-            let Some(label) = line.first_child().and_downcast::<gtk::Label>() else {
+            let Some(cursor) = line.first_child().and_downcast::<gtk::Label>() else {
+                return;
+            };
+            let Some(label) = cursor.next_sibling().and_downcast::<gtk::Label>() else {
                 return;
             };
             let Some(detail) = label.next_sibling().and_downcast::<gtk::Label>() else {
                 return;
             };
+            cursor.set_text(crate::style::cursor(style, item.is_selected()));
             let rows = rows.borrow();
             let position = usize::try_from(item.position()).unwrap_or(usize::MAX);
             if let Some(row) = rows.get(position) {
