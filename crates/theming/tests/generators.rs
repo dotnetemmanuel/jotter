@@ -1,6 +1,6 @@
 //! Snapshot tests for the three generator outputs.
 
-use jotter_theming::{Mode, Theme, ThemeFile};
+use jotter_theming::{Mode, Style, Theme, ThemeFile};
 
 fn resolve(id: &str, mode: Mode) -> Theme {
     let src = jotter_theming::bundled::BUNDLED
@@ -52,4 +52,18 @@ fn event_horizon_dark_sourceview_scheme() {
 #[test]
 fn event_horizon_dark_preview_css() {
     insta::assert_snapshot!(resolve("event-horizon", Mode::Dark).to_preview_css());
+}
+
+#[test]
+fn retro82_dark_tui_gtk_css() {
+    insta::assert_snapshot!(resolve("retro82", Mode::Dark).with_style(Style::Tui).to_gtk_css());
+}
+
+#[test]
+fn event_horizon_dark_tui_gtk_css() {
+    insta::assert_snapshot!(
+        resolve("event-horizon", Mode::Dark)
+            .with_style(Style::Tui)
+            .to_gtk_css()
+    );
 }

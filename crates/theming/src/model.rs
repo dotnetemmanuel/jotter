@@ -34,6 +34,30 @@ fn default_mode() -> Mode {
     Mode::Dark
 }
 
+/// Which visual language the chrome is drawn in.
+///
+/// A user choice rather than a theme property, so it never appears in a theme
+/// file: the app stamps it onto the theme it resolves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Style {
+    /// Small corners, thick structural lines, a sans UI font.
+    #[default]
+    Classic,
+    /// A terminal look: square corners, hairline frames, a monospace UI font.
+    Tui,
+}
+
+impl Style {
+    /// The lowercase name used in the config file.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Style::Classic => "classic",
+            Style::Tui => "tui",
+        }
+    }
+}
+
 /// A theme file as it sits on disk: metadata, both palettes, and structural
 /// sections with unresolved `$token` references.
 #[derive(Debug, Clone, Deserialize)]
@@ -217,6 +241,8 @@ pub struct Theme {
     pub label: String,
     /// The mode this theme was resolved for.
     pub mode: Mode,
+    /// The visual language the chrome is drawn in.
+    pub style: Style,
     /// Resolved chrome colors and geometry.
     pub chrome: Chrome,
     /// Resolved editor colors.
@@ -240,5 +266,12 @@ impl Theme {
     #[must_use]
     pub fn scheme_name(&self) -> String {
         format!("{} {}", self.label, self.mode.as_str())
+    }
+
+    /// The same theme drawn in another style.
+    #[must_use]
+    pub fn with_style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
     }
 }

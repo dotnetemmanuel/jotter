@@ -6,12 +6,20 @@
 //! block that pops the accent on hover; the selected tree row is a flat accent
 //! block. Depth comes from color and line, not shadow.
 
-use crate::model::Theme;
+use crate::model::{Style, Theme};
 
 impl Theme {
-    /// Render the application chrome as GTK4 CSS.
+    /// Render the application chrome as GTK4 CSS, in this theme's style.
     #[must_use]
     pub fn to_gtk_css(&self) -> String {
+        match self.style {
+            Style::Classic => self.classic_css(),
+            Style::Tui => self.tui_css(),
+        }
+    }
+
+    /// The bauhaus-leaning default.
+    fn classic_css(&self) -> String {
         let c = &self.chrome;
         let t = &self.typography;
         let r = c.radius;
@@ -65,12 +73,12 @@ popover > contents {{\n  background-color: {surface};\n  color: {text};\n  borde
             ui_font = t.ui_font,
             size = t.font_size,
             small = t.font_size.saturating_sub(1),
-        ) + &self.parts_css()
+        ) + &self.classic_parts_css()
     }
 
     /// The half of the stylesheet that dresses jotter's own widgets, split
     /// from the general chrome so neither is a wall of text.
-    fn parts_css(&self) -> String {
+    fn classic_parts_css(&self) -> String {
         let c = &self.chrome;
         let t = &self.typography;
         let r = c.radius;

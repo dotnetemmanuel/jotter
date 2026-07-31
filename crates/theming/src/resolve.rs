@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::ThemeError;
-use crate::model::{Chrome, Code, Editor, Mode, Preview, Theme, ThemeFile};
+use crate::model::{Chrome, Code, Editor, Mode, Preview, Style, Theme, ThemeFile};
 
 impl ThemeFile {
     /// Resolve this theme for the given mode.
@@ -40,6 +40,7 @@ impl ThemeFile {
             id: self.id.clone(),
             label: self.label.clone(),
             mode,
+            style: Style::Classic,
             chrome,
             editor,
             preview,

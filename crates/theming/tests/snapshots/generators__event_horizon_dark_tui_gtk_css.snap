@@ -1,0 +1,228 @@
+---
+source: crates/theming/tests/generators.rs
+expression: "resolve(\"event-horizon\", Mode::Dark).with_style(Style::Tui).to_gtk_css()"
+---
+/* Event Horizon dark tui */
+window {
+  background-color: #1c1e26;
+  color: #fadad1;
+  font-family: Inter, sans-serif;
+  font-size: 15px;
+}
+
+headerbar {
+  background-color: #1c1e26;
+  background-image: none;
+  color: #fadad1;
+  border-bottom: 1px solid #26bbd9;
+  box-shadow: none;
+  padding-left: 0;
+}
+
+separator {
+  background-color: alpha(#26bbd9, 0.45);
+  min-height: 1px;
+  min-width: 1px;
+}
+
+paned > separator {
+  background-color: alpha(#26bbd9, 0.45);
+  background-image: none;
+  min-width: 1px;
+  min-height: 1px;
+}
+
+.sidebar {
+  background-color: #1c1e26;
+}
+
+.sidebar listview {
+  background-color: transparent;
+  color: #fadad1;
+  padding-top: 2px;
+}
+
+.sidebar listview > row {
+  border-radius: 0;
+  padding: 1px 6px;
+  margin: 0;
+}
+
+.sidebar listview > row:hover {
+  background-color: #2e303e;
+}
+
+.sidebar listview > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.sidebar listview > row:selected:hover {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.vault-name {
+  color: #26bbd9;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 6px 8px 2px 8px;
+  border-bottom: 1px solid alpha(#26bbd9, 0.45);
+}
+
+.tree-cursor {
+  color: #ee64ac;
+}
+
+.sidebar listview > row:selected .tree-cursor {
+  color: #1c1e26;
+}
+
+.tree-inert {
+  color: #6c6f93;
+  opacity: 0.55;
+}
+
+.tree-title {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.sidebar listview > row:selected .tree-title {
+  color: alpha(#1c1e26, 0.7);
+}
+
+.tree-drop {
+  box-shadow: inset 0 0 0 1px #ee64ac;
+  border-radius: 0;
+}
+
+.sidebar listview:drop(active), .sidebar listview > row:drop(active) {
+  box-shadow: none;
+  outline: none;
+}
+
+button {
+  background-color: transparent;
+  background-image: none;
+  color: #26bbd9;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 3px 8px;
+}
+
+button:hover {
+  background-color: #26bbd9;
+  color: #1c1e26;
+}
+
+button:checked {
+  background-color: #ee64ac;
+  background-image: none;
+  color: #1c1e26;
+}
+
+button.suggested-action {
+  background-color: transparent;
+  background-image: none;
+  color: #ee64ac;
+}
+
+button.suggested-action:hover {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+button.destructive-action {
+  background-color: transparent;
+  background-image: none;
+  color: #e95678;
+}
+
+button.destructive-action:hover {
+  background-color: #e95678;
+  color: #1c1e26;
+}
+
+windowcontrols button, windowcontrols button.titlebutton {
+  background-color: transparent;
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  color: #fadad1;
+}
+
+windowcontrols button:hover, windowcontrols button.titlebutton:hover {
+  background-color: #26bbd9;
+  background-image: none;
+  color: #1c1e26;
+  border-radius: 0;
+}
+
+windowcontrols button image, windowcontrols button:hover image {
+  background: none;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: #fadad1;
+}
+
+entry {
+  background-color: #1c1e26;
+  background-image: none;
+  color: #fadad1;
+  border: 1px solid alpha(#26bbd9, 0.55);
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  padding: 3px 6px;
+}
+
+entry:focus-within, entry:hover, entry:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+entry:focus-within {
+  border-color: #26bbd9;
+}
+
+entry > text, entry > text:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {
+  outline: none;
+}
+
+scrollbar {
+  background-color: transparent;
+  border: none;
+}
+
+scrollbar slider {
+  background-color: #6c6f93;
+  border: none;
+  border-radius: 0;
+  min-width: 6px;
+  min-height: 6px;
+  margin: 0;
+}
+
+scrollbar slider:hover {
+  background-color: #26bbd9;
+}
+
+popover > contents {
+  background-color: #1c1e26;
+  color: #fadad1;
+  border: 1px solid #26bbd9;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.picker-scrim {
+  background-color: alpha(#1c1e26, 0.6);
+}

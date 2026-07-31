@@ -3,3 +3,4 @@
 mod gtk_css;
 mod preview_css;
 mod sourceview;
+mod tui_css;

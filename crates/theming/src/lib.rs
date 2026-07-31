@@ -21,5 +21,6 @@ mod resolve;
 
 pub use error::ThemeError;
 pub use model::{
-    Chrome, Code, Editor, EditorSyntax, Mode, Palettes, Preview, Theme, ThemeFile, Typography,
+    Chrome, Code, Editor, EditorSyntax, Mode, Palettes, Preview, Style, Theme, ThemeFile,
+    Typography,
 };
