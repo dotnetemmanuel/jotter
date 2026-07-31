@@ -110,3 +110,21 @@ fn the_tui_row_cursor_inverts_on_the_selected_row() {
     let css = theme.to_gtk_css();
     assert!(css.contains(".search-results > row:selected .row-cursor"));
 }
+
+#[test]
+fn the_tui_sheet_dresses_the_completion_popup_surface() {
+    let theme = tui("retro82", Mode::Dark);
+    let accent = theme.chrome.accent.clone();
+    let bg = theme.chrome.background.clone();
+    let css = theme.to_gtk_css();
+    assert!(
+        css.contains(".completion list {"),
+        "the completion rows should be styled by list, the ListBox's real CSS node name"
+    );
+    assert!(
+        css.contains(&format!(
+            ".completion list > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}"
+        )),
+        "the selected completion row should use the theme accent, not GTK's default blue"
+    );
+}

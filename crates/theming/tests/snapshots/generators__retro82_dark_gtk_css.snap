@@ -541,17 +541,22 @@ popover > contents {
   border-left: 1px solid alpha(#f6dcac, 0.18);
 }
 
-.completion listbox {
+.completion list {
   background-color: transparent;
   color: #f6dcac;
+  font-family: Inter, sans-serif;
 }
 
-.completion listbox > row {
+.completion list > row {
   border-radius: 3px;
   padding: 2px 8px;
 }
 
-.completion listbox > row:selected {
+.completion list > row:hover {
+  background-color: #134e5a;
+}
+
+.completion list > row:selected {
   background-color: #faa968;
   color: #05182e;
 }

@@ -133,9 +133,10 @@ popover > contents {{\n  background-color: {bg};\n  color: {text};\n  border: 1p
 .search-count {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
 .search-results > row:selected .search-folder, .search-results > row:selected .search-count {{\n  color: alpha({bg}, 0.7);\n}}\n\n\
 .search-snippet {{\n  color: {muted};\n  margin-left: 0;\n  padding: 0 0 0 8px;\n  border-left: 1px solid alpha({focus}, 0.3);\n}}\n\n\
-.completion listbox {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
-.completion listbox > row {{\n  border-radius: 0;\n  padding: 1px 6px;\n}}\n\n\
-.completion listbox > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
+.completion list {{\n  background-color: transparent;\n  color: {text};\n  font-family: {ui_font};\n}}\n\n\
+.completion list > row {{\n  border-radius: 0;\n  padding: 1px 6px;\n}}\n\n\
+.completion list > row:hover {{\n  background-color: {overlay};\n}}\n\n\
+.completion list > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .picker {{\n  background-color: {bg};\n  color: {text};\n  border: 1px solid {focus};\n  border-radius: 0;\n  padding: 0;\n}}\n\n\
 .picker-title {{\n  color: {focus};\n  font-family: {editor_font};\n  font-size: {small}px;\n  padding: 2px 6px 0 6px;\n}}\n\n\
 .picker-prompt {{\n  color: {accent};\n  font-family: {editor_font};\n  font-size: {picker_size}px;\n  padding: 0 0 0 6px;\n}}\n\n\
@@ -156,6 +157,7 @@ tooltip {{\n  background-color: {bg};\n  color: {text};\n  border: 1px solid {fo
             danger = c.danger,
             muted = c.muted,
             editor_font = t.editor_font,
+            ui_font = t.ui_font,
             picker_size = t.font_size + 4,
             small = t.font_size.saturating_sub(1),
             back_size = t.font_size + 1,
