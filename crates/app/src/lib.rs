@@ -194,6 +194,9 @@ struct State {
     quiet_selection: Cell<bool>,
     /// Tree row the app wants selected, reapplied after any rebuild.
     wanted_row: RefCell<Option<PathBuf>>,
+    /// Style the sidebar tree was last built in, so a repaint only rebuilds it
+    /// when the style actually changed.
+    tree_style: Cell<Style>,
     /// Layer the picker panel is added to, above the editor and preview.
     overlay: gtk::Overlay,
     /// The application, for activating an action the command palette chose.
@@ -432,6 +435,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     let startup = resolve_startup(path_arg, &config);
 
     let logo = logo_image(&theme.chrome.text);
+    // Matches the style the tree will bind in when it is built below.
+    let tree_style = Cell::new(theme.style);
     let state = Rc::new(State {
         editor,
         preview,
@@ -454,6 +459,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         single_file: RefCell::new(None),
         quiet_selection: Cell::new(false),
         wanted_row: RefCell::new(None),
+        tree_style,
         overlay: gtk::Overlay::new(),
         app: app.clone(),
         picker: RefCell::new(None),
@@ -483,8 +489,7 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         Startup::File(path) => open_single_file(&state, path.as_deref()),
     }
 
-    // Widgets are built with classic idioms regardless of the resolved style,
-    // so a cold start applies the real one once before the window shows.
+    // Widgets are built classic, so a cold start applies the real style once.
     restyle(&state);
 
     wire_actions(app, &state);
@@ -3245,7 +3250,6 @@ fn set_appearance<F: Fn(&mut config::Appearance)>(state: &Rc<State>, change: F) 
         }
     };
     apply_theme(state, next);
-    refresh_size_indicator(state);
 }
 
 /// Repaints every surface for `next` and keeps it as the active theme.
@@ -3286,11 +3290,15 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
 ///
 /// The dress is CSS and lands with the provider; these are widget contents, so
 /// they are rewritten here. Idempotent: `apply_theme` calls it on every theme,
-/// mode, font, or style change.
+/// mode, font, or style change. The tree is rebuilt only when the style itself
+/// changed, since that call is expensive and steals focus.
 fn restyle(state: &Rc<State>) {
     let style = state.theme.borrow().style;
     refresh_vault_name(state);
-    rebuild_tree(state);
+    if state.tree_style.get() != style {
+        rebuild_tree(state);
+        state.tree_style.set(style);
+    }
     state.search_panel.set_style(style);
     state.tags_panel.set_style(style);
     state.report_panel.set_style(style);

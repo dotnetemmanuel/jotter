@@ -216,8 +216,7 @@ where
         let line = gtk::Box::new(Orientation::Horizontal, 0);
         let prompt = gtk::Label::new(Some(">"));
         prompt.add_css_class("picker-prompt");
-        // A typed leading `>` is itself the prompt, in command mode; the
-        // chrome supplies one only while the query has not claimed it.
+        // A typed leading > is its own prompt; the chrome supplies one otherwise.
         prompt.set_visible(!initial_query.starts_with('>'));
         line.append(&prompt);
         entry.set_hexpand(true);
