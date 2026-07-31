@@ -151,6 +151,17 @@ the settings dropdown. Format is JSONC (comments allowed); strip comments before
 serde. The chrome is neo-brutalist: thick borders, hard offset shadows, rounded
 corners.
 
+A theme is resolved for a mode and then drawn in a style: `classic`, the
+neo-brutalist default above, or `tui`, a terminal look. Style is a user choice
+in `config.appearance.style`, not a theme property, so it never appears in a
+theme file: `appearance::resolve` stamps it onto the resolved `Theme`, and
+`Theme::to_gtk_css` dispatches on it. Both styles draw from the same tokens,
+with `focus` carrying the structure (frames, rules, cursors) in TUI. The
+character-level idioms, tree markers, row cursors, upper-case headings,
+bracketed buttons and status segments, live in `crates/app/src/style.rs`,
+re-applied by `restyle`, which `apply_theme` calls on every repaint and once
+more at startup.
+
 ## Config resolution
 
 Global `~/.config/jotter/config.toml` (serde + toml). Per-vault
