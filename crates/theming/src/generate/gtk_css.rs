@@ -58,7 +58,7 @@ entry {{\n  background-color: transparent;\n  background-image: none;\n  color: 
 entry:focus-within, entry:hover, entry:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
 entry:focus-within {{\n  border-bottom-color: {accent};\n}}\n\n\
 entry > text, entry > text:focus-visible {{\n  outline: none;\n  box-shadow: none;\n}}\n\n\
-row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {{\n  outline: none;\n}}\n\n\
+row:focus, row:focus-visible, listview:focus-visible, list:focus-visible {{\n  outline: none;\n}}\n\n\
 popover > contents {{\n  background-color: {surface};\n  color: {text};\n  border: {bw}px solid {border};\n  border-radius: {r}px;\n  box-shadow: none;\n}}\n\n\
 .picker-scrim {{\n  background-color: alpha({bg}, 0.45);\n}}\n\n",
             name = self.scheme_name(),

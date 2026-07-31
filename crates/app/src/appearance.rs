@@ -16,7 +16,7 @@ pub const MAX_SIZE: u32 = 32;
 pub fn apply(theme: &mut Theme, appearance: &Appearance) {
     theme.style = style_of(appearance);
     if theme.style == Style::Tui {
-        // The theme's own font: the rail draws Nerd Font glyphs a chosen font may lack.
+        // Pins ui_font to the theme's own font, ahead of the editor_font override below.
         theme.typography.ui_font = theme.typography.editor_font.clone();
     }
     if let Some(font) = font_of(appearance.editor_font.as_deref()) {

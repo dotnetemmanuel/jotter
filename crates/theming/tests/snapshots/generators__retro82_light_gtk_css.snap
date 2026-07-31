@@ -191,7 +191,7 @@ entry > text, entry > text:focus-visible {
   box-shadow: none;
 }
 
-row:focus, row:focus-visible, listview:focus-visible, listbox:focus-visible {
+row:focus, row:focus-visible, listview:focus-visible, list:focus-visible {
   outline: none;
 }
 
