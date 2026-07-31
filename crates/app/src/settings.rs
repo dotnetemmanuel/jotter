@@ -11,7 +11,7 @@ use std::cell::{Cell, RefCell};
 use gtk::prelude::*;
 use gtk::{Orientation, gdk, glib};
 
-use jotter_theming::{Mode, Theme};
+use jotter_theming::{Mode, Style, Theme};
 
 /// What the window asks the app to change.
 pub enum Change {
@@ -19,6 +19,8 @@ pub enum Change {
     Theme(String),
     /// Switch to light or dark.
     Mode(Mode),
+    /// Switch between the classic look and the TUI one.
+    Style(Style),
     /// Set the editor font family, or clear it back to the theme's own.
     EditorFont(Option<String>),
     /// Set the font size, which the editor and the preview share.
@@ -41,6 +43,8 @@ pub struct Current {
     pub theme: String,
     /// Light or dark.
     pub mode: Mode,
+    /// The classic look or the TUI one.
+    pub style: Style,
     /// Editor font: what the theme asks for, and the user's override if any.
     pub editor_font: Font,
     /// Preview font: what the theme asks for, and the user's override if any.
@@ -56,6 +60,9 @@ pub struct Handle {
     pub window: gtk::Window,
     /// Reflects the app's current mode back into the controls.
     sync: Rc<dyn Fn(Mode)>,
+    /// Reflects the app's current style back into the controls.
+    #[allow(dead_code)] // no outside trigger changes the style yet, unlike mode's Ctrl+T
+    sync_style: Rc<dyn Fn(Style)>,
     /// Reflects a font size changed from outside, by Ctrl+plus or the wheel.
     sync_size: Rc<dyn Fn(u32)>,
 }
@@ -64,6 +71,12 @@ impl Handle {
     /// Updates the controls to match `mode` without reporting a change back.
     pub fn show_mode(&self, mode: Mode) {
         (self.sync)(mode);
+    }
+
+    /// Updates the controls to match `style` without reporting a change back.
+    #[allow(dead_code)] // no outside trigger changes the style yet, unlike mode's Ctrl+T
+    pub fn show_style(&self, style: Style) {
+        (self.sync_style)(style);
     }
 
     /// Updates the size control without reporting a change back.
@@ -92,6 +105,7 @@ pub fn open<F: Fn(Change) + 'static>(
         theme_buttons(themes, current_theme, &mode_now, &swatches, &on_change);
 
     let (modes, light, dark) = mode_buttons(current_mode, &mode_now, &swatches, &quiet, &on_change);
+    let (styles, classic, tui) = style_buttons(current.style, &quiet, &on_change);
 
     let grid = gtk::Grid::builder()
         .row_spacing(10)
@@ -101,7 +115,9 @@ pub fn open<F: Fn(Change) + 'static>(
         .margin_start(16)
         .margin_end(16)
         .build();
-    grid.attach(&row_label("Theme"), 0, 0, 1, 1);
+    grid.attach(&row_label("Style"), 0, 0, 1, 1);
+    grid.attach(&styles, 1, 0, 1, 1);
+    grid.attach(&row_label("Theme"), 0, 1, 1, 1);
     // Capped and scrollable: a themes folder can hold any number of files, and
     // an uncapped row of buttons would grow the window past the screen.
     let themes_scroller = gtk::ScrolledWindow::builder()
@@ -113,9 +129,9 @@ pub fn open<F: Fn(Change) + 'static>(
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&themes_row)
         .build();
-    grid.attach(&themes_scroller, 1, 0, 1, 1);
-    grid.attach(&row_label("Mode"), 0, 1, 1, 1);
-    grid.attach(&modes, 1, 1, 1, 1);
+    grid.attach(&themes_scroller, 1, 1, 1, 1);
+    grid.attach(&row_label("Mode"), 0, 2, 1, 1);
+    grid.attach(&modes, 1, 2, 1, 1);
 
     let size = size_row(&grid, current.size, &on_change);
 
@@ -191,6 +207,8 @@ pub fn open<F: Fn(Change) + 'static>(
         })
     };
 
+    let sync_style = style_sync(&classic, &tui, &quiet);
+
     let sync_size: Rc<dyn Fn(u32)> = {
         let size = size.clone();
         Rc::new(move |value| size.set_label(&value.to_string()))
@@ -199,6 +217,7 @@ pub fn open<F: Fn(Change) + 'static>(
     Handle {
         window,
         sync,
+        sync_style,
         sync_size,
     }
 }
@@ -252,6 +271,50 @@ fn mode_buttons(
     modes.append(&dark);
 
     (modes, light, dark)
+}
+
+/// The classic and TUI pair, and the flag that keeps a programmatic toggle from
+/// echoing back as a request to change the style.
+fn style_buttons(
+    current: Style,
+    quiet: &Rc<Cell<bool>>,
+    on_change: &Rc<impl Fn(Change) + 'static>,
+) -> (gtk::Box, gtk::ToggleButton, gtk::ToggleButton) {
+    let classic = gtk::ToggleButton::with_label("Classic");
+    let tui = gtk::ToggleButton::with_label("TUI");
+    tui.set_group(Some(&classic));
+    match current {
+        Style::Classic => classic.set_active(true),
+        Style::Tui => tui.set_active(true),
+    }
+    for (button, style) in [(&classic, Style::Classic), (&tui, Style::Tui)] {
+        let switched = Rc::clone(on_change);
+        let hushed = Rc::clone(quiet);
+        button.connect_toggled(move |button| {
+            if button.is_active() && !hushed.get() {
+                switched(Change::Style(style));
+            }
+        });
+    }
+    let row = gtk::Box::new(Orientation::Horizontal, 8);
+    row.append(&classic);
+    row.append(&tui);
+    (row, classic, tui)
+}
+
+/// Reflects a style changed from outside back into the classic and TUI toggles.
+fn style_sync(classic: &gtk::ToggleButton, tui: &gtk::ToggleButton, quiet: &Rc<Cell<bool>>) -> Rc<dyn Fn(Style)> {
+    let classic = classic.clone();
+    let tui = tui.clone();
+    let quiet = Rc::clone(quiet);
+    Rc::new(move |style| {
+        quiet.set(true);
+        match style {
+            Style::Classic => classic.set_active(true),
+            Style::Tui => tui.set_active(true),
+        }
+        quiet.set(false);
+    })
 }
 
 /// How wide and tall one theme swatch is drawn.
@@ -395,8 +458,8 @@ fn size_row(
     }
     row.append(&gtk::Label::new(Some("shared by the editor and the preview")));
 
-    grid.attach(&row_label("Font size"), 0, 2, 1, 1);
-    grid.attach(&row, 1, 2, 1, 1);
+    grid.attach(&row_label("Font size"), 0, 3, 1, 1);
+    grid.attach(&row, 1, 3, 1, 1);
     shown
 }
 
@@ -410,15 +473,15 @@ fn attach_font_rows(
     let editor = font_row(&crate::fonts::families(true), &current.editor_font, move |name| {
         picked(Change::EditorFont(name));
     });
-    grid.attach(&row_label("Editor font"), 0, 3, 1, 1);
-    grid.attach(&editor, 1, 3, 1, 1);
+    grid.attach(&row_label("Editor font"), 0, 4, 1, 1);
+    grid.attach(&editor, 1, 4, 1, 1);
 
     let picked = Rc::clone(on_change);
     let preview = font_row(&crate::fonts::families(false), &current.preview_font, move |name| {
         picked(Change::PreviewFont(name));
     });
-    grid.attach(&row_label("Preview font"), 0, 4, 1, 1);
-    grid.attach(&preview, 1, 4, 1, 1);
+    grid.attach(&row_label("Preview font"), 0, 5, 1, 1);
+    grid.attach(&preview, 1, 5, 1, 1);
 }
 
 /// A font row: a filter box over the families installed, and a size beside it.

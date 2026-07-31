@@ -2463,6 +2463,7 @@ fn open_settings(state: &Rc<State>) {
         settings::Current {
             theme: state.theme_file.borrow().id.clone(),
             mode: theme.mode,
+            style: appearance::style_of(look),
             editor_font: settings::Font {
                 theme: typography.editor_font.clone(),
                 chosen: look.editor_font.clone(),
@@ -2479,6 +2480,9 @@ fn open_settings(state: &Rc<State>) {
     let handle = settings::open(&parent, &ids, &current, move |change| match change {
         settings::Change::Theme(id) => set_theme(&changing, &id),
         settings::Change::Mode(mode) => set_theme_mode(&changing, mode),
+        settings::Change::Style(style) => set_appearance(&changing, |appearance| {
+            appearance.style = Some(appearance::style_name(style).to_string());
+        }),
         settings::Change::EditorFont(name) => {
             set_appearance(&changing, |look| look.editor_font.clone_from(&name));
         }

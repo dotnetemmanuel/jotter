@@ -96,7 +96,6 @@ pub fn style_of(appearance: &Appearance) -> Style {
 
 /// How a style is written in the config.
 #[must_use]
-#[allow(dead_code)] // wired into the settings window in Task 4
 pub fn style_name(style: Style) -> &'static str {
     style.as_str()
 }
