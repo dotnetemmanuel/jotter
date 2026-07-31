@@ -8,6 +8,8 @@
 use gtk::prelude::*;
 use gtk::{Orientation, gdk, glib};
 
+use jotter_theming::Style;
+
 /// Actions the sheet lists, grouped the way it shows them.
 const SECTIONS: [(&str, &[(&str, &str)]); 4] = [
     (
@@ -118,7 +120,7 @@ pub fn sections(accel: &dyn Fn(&str) -> String) -> Vec<Section> {
 ///
 /// Returns the window so the caller can close it when the key comes a second
 /// time, the way the settings window works.
-pub fn open(parent: &gtk::Window, sections: &[Section]) -> gtk::Window {
+pub fn open(parent: &gtk::Window, sections: &[Section], style: Style) -> gtk::Window {
     let columns = gtk::Box::new(Orientation::Horizontal, 28);
     columns.set_margin_top(16);
     columns.set_margin_bottom(16);
@@ -128,7 +130,7 @@ pub fn open(parent: &gtk::Window, sections: &[Section]) -> gtk::Window {
     let (left, right) = (column(), column());
     for (index, section) in sections.iter().enumerate() {
         let side = if index % 2 == 0 { &left } else { &right };
-        side.append(&section_block(section));
+        side.append(&section_block(section, style));
     }
     columns.append(&left);
     columns.append(&right);
@@ -177,10 +179,10 @@ fn column() -> gtk::Box {
 }
 
 /// A heading and its bindings, keys on the left and meaning on the right.
-fn section_block(section: &Section) -> gtk::Box {
+fn section_block(section: &Section, style: Style) -> gtk::Box {
     let block = gtk::Box::new(Orientation::Vertical, 6);
     let heading = gtk::Label::builder()
-        .label(&section.name)
+        .label(crate::style::heading(style, &section.name))
         .xalign(0.0)
         .build();
     heading.add_css_class("keysheet-heading");

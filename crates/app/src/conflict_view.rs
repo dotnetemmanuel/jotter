@@ -12,6 +12,7 @@ use gtk::prelude::*;
 use gtk::{Orientation, ScrolledWindow, gdk, glib};
 
 use jotter_git::conflict::{Choice, Region};
+use jotter_theming::Style;
 
 use crate::conflict_model::{Model, heading, progress_text};
 
@@ -47,6 +48,10 @@ pub struct View {
     /// Set while a rebase is pending, so Continue works even once every block
     /// has been answered and staged and the model has nothing left to count.
     pending: std::cell::Cell<bool>,
+    /// Every action button with the label it wears in classic, so a style
+    /// change can rewrite the faces.
+    actions: Vec<(gtk::Button, String)>,
+    style: std::cell::Cell<Style>,
 }
 
 /// One column: a title over a monospaced body.
@@ -146,6 +151,16 @@ impl View {
         bar.append(&proceed);
         bar.append(&abort);
 
+        let actions = vec![
+            (take_incoming.clone(), "Take incoming".to_string()),
+            (take_yours.clone(), "Take yours".to_string()),
+            (keep_both.clone(), "Take both".to_string()),
+            (edit.clone(), "Edit by hand".to_string()),
+            (save.clone(), "Save edit".to_string()),
+            (proceed.clone(), "Continue".to_string()),
+            (abort.clone(), "Abort sync".to_string()),
+        ];
+
         let root = gtk::Box::new(Orientation::Vertical, 8);
         root.add_css_class("conflict");
         // A Box takes no focus of its own, so the key controller below would
@@ -169,6 +184,8 @@ impl View {
             model: RefCell::new(Model::new(Vec::new())),
             editing: std::cell::Cell::new(false),
             pending: std::cell::Cell::new(false),
+            actions,
+            style: std::cell::Cell::new(Style::Classic),
         });
 
         let on_request = Rc::new(on_request);
@@ -230,6 +247,17 @@ impl View {
     /// Records that a rebase is waiting to be finished.
     pub fn allow_continue(&self, pending: bool) {
         self.pending.set(pending);
+        self.redraw();
+    }
+
+    /// Redraws the page in `style`: bracketed actions and upper-case pane titles.
+    pub fn set_style(&self, style: Style) {
+        self.style.set(style);
+        for (button, label) in &self.actions {
+            button.set_label(&crate::style::button(style, label));
+        }
+        self.incoming.set_title(&crate::style::heading(style, "Incoming"));
+        self.yours.set_title(&crate::style::heading(style, "Yours"));
         self.redraw();
     }
 
@@ -328,10 +356,11 @@ impl View {
         self.yours.set_text(&lines(&region.yours));
 
         let choice = model.choice();
-        self.resolution.set_title(match choice {
+        let title = match choice {
             Choice::Unresolved => "Resolution",
             _ => "Resolution \u{2713}",
-        });
+        };
+        self.resolution.set_title(&crate::style::heading(self.style.get(), title));
         if self.editing.get() {
             return;
         }
