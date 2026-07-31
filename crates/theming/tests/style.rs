@@ -48,6 +48,15 @@ fn the_tui_sheet_has_no_rounded_corners() {
 }
 
 #[test]
+fn the_tui_sheet_squares_the_window_decoration() {
+    let css = tui("retro82", Mode::Dark).to_gtk_css();
+    assert!(
+        css.contains("window.csd {\n  border-radius: 0;\n}"),
+        "the toplevel's own CSD frame should lose its rounded corners too"
+    );
+}
+
+#[test]
 fn the_tui_sheet_draws_its_structure_in_the_focus_color() {
     let theme = tui("event-horizon", Mode::Dark);
     let focus = theme.chrome.focus.clone();

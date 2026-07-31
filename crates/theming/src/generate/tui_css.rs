@@ -15,6 +15,7 @@ impl Theme {
         format!(
             "/* {name} tui */\n\
 window {{\n  background-color: {bg};\n  color: {text};\n  font-family: {ui_font};\n  font-size: {size}px;\n}}\n\n\
+window.csd {{\n  border-radius: 0;\n}}\n\n\
 headerbar {{\n  background-color: {bg};\n  background-image: none;\n  color: {text};\n  border-bottom: 1px solid {focus};\n  box-shadow: none;\n  padding-left: 0;\n}}\n\n\
 separator {{\n  background-color: alpha({focus}, 0.45);\n  min-height: 1px;\n  min-width: 1px;\n}}\n\n\
 paned > separator {{\n  background-color: alpha({focus}, 0.45);\n  background-image: none;\n  min-width: 1px;\n  min-height: 1px;\n}}\n\n\

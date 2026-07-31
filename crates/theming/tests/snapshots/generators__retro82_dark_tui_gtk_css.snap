@@ -10,6 +10,10 @@ window {
   font-size: 15px;
 }
 
+window.csd {
+  border-radius: 0;
+}
+
 headerbar {
   background-color: #05182e;
   background-image: none;
