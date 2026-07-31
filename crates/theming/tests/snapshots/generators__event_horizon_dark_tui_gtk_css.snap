@@ -226,3 +226,408 @@ popover > contents {
 .picker-scrim {
   background-color: alpha(#1c1e26, 0.6);
 }
+.rail {
+  background-color: #1c1e26;
+  padding: 6px 0;
+}
+
+.rail-button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #6c6f93;
+  padding: 8px 4px;
+  min-height: 0;
+  min-width: 0;
+  border-radius: 0;
+}
+
+.rail-button label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 21px;
+  border-bottom: none;
+}
+
+.rail-button:hover {
+  background-color: #2e303e;
+  color: #fadad1;
+}
+
+.rail-button:checked {
+  background: none;
+  color: #ee64ac;
+  box-shadow: inset 2px 0 0 0 #ee64ac;
+}
+
+.rail-settings {
+  padding-left: 3px;
+  padding-right: 6px;
+}
+
+.font-tick {
+  color: #ee64ac;
+}
+
+.font-list {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.font-list > row {
+  padding: 1px 6px;
+  border-radius: 0;
+}
+
+.font-list > row:hover {
+  background-color: #2e303e;
+}
+
+.font-list > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+  box-shadow: none;
+}
+
+.settings {
+  background-color: #1c1e26;
+}
+
+.settings-label {
+  color: #26bbd9;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #fadad1;
+  padding: 3px 8px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.settings-close:hover {
+  background-color: #26bbd9;
+  color: #1c1e26;
+}
+
+.keysheet-heading {
+  color: #26bbd9;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.keysheet-keys {
+  color: #6c6f93;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+}
+
+.theme-button {
+  padding: 4px;
+  border: 1px solid transparent;
+}
+
+.theme-button:checked {
+  background: none;
+  color: #fadad1;
+  border-color: #ee64ac;
+}
+
+.theme-name {
+  font-size: 14px;
+}
+
+.conflict {
+  background-color: #1c1e26;
+  padding: 8px 10px;
+}
+
+.conflict-header {
+  padding-bottom: 4px;
+  border-bottom: 1px solid alpha(#26bbd9, 0.45);
+}
+
+.conflict-heading {
+  font-weight: bold;
+}
+
+.conflict-progress {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.conflict-title {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+  font-weight: bold;
+  padding: 0 2px 2px 2px;
+  border-radius: 0;
+  border-bottom: 1px solid alpha(#26bbd9, 0.45);
+}
+
+.conflict-title.conflict-incoming {
+  color: #26bbd9;
+}
+
+.conflict-title.conflict-yours {
+  color: #ee64ac;
+}
+
+.conflict-title.conflict-resolution {
+  color: #fadad1;
+}
+
+.conflict-body {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  border-radius: 0;
+  padding: 4px 6px;
+  border: 1px solid alpha(#26bbd9, 0.45);
+}
+
+.conflict-body, .conflict-body text {
+  background-color: #1c1e26;
+  color: #fadad1;
+}
+
+.conflict-body.conflict-incoming {
+  border-color: #26bbd9;
+}
+
+.conflict-body.conflict-yours {
+  border-color: #ee64ac;
+}
+
+.conflict-actions {
+  padding-top: 4px;
+}
+
+.conflict-action {
+  padding: 3px 8px;
+}
+
+.status-size, .status-git, .status-broken {
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+  padding: 0 6px;
+  min-height: 0;
+}
+
+.status-size, .status-git {
+  color: #6c6f93;
+}
+
+.status-broken {
+  color: #e95678;
+}
+
+.status-size:hover, .status-git:hover, .status-broken:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.backlinks {
+  background-color: #1c1e26;
+}
+
+.backlinks-header {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #26bbd9;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+  padding: 2px 8px;
+  min-height: 0;
+}
+
+.backlinks-header:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.panel-bar {
+  border-bottom: 1px solid alpha(#26bbd9, 0.45);
+}
+
+.search-results {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.search-results > row {
+  border-radius: 0;
+  padding: 0 6px;
+  margin: 0;
+}
+
+.search-results > row:hover {
+  background-color: #2e303e;
+}
+
+.search-results > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+  box-shadow: none;
+}
+
+.row-cursor {
+  color: #ee64ac;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+}
+
+.search-results > row:selected .row-cursor {
+  color: #1c1e26;
+}
+
+.panel-back {
+  background: none;
+  border: none;
+  box-shadow: none;
+  color: #26bbd9;
+  padding: 0 4px;
+  margin: 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panel-back label {
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 16px;
+}
+
+.panel-back:hover {
+  background: none;
+  color: #ee64ac;
+}
+
+.tags-heading {
+  color: #26bbd9;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.tag-row {
+  padding: 1px 4px;
+}
+
+.search-heading {
+  margin-top: 10px;
+  padding: 0 2px 2px 2px;
+  border-bottom: 1px solid alpha(#26bbd9, 0.3);
+}
+
+.search-results > row:first-child .search-heading {
+  margin-top: 0;
+}
+
+.search-name {
+  font-weight: bold;
+}
+
+.search-folder {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.search-count {
+  color: #6c6f93;
+  font-size: 14px;
+}
+
+.search-results > row:selected .search-folder, .search-results > row:selected .search-count {
+  color: alpha(#1c1e26, 0.7);
+}
+
+.search-snippet {
+  color: #6c6f93;
+  margin-left: 0;
+  padding: 0 0 0 8px;
+  border-left: 1px solid alpha(#26bbd9, 0.3);
+}
+
+.completion listbox {
+  background-color: transparent;
+  color: #fadad1;
+}
+
+.completion listbox > row {
+  border-radius: 0;
+  padding: 1px 6px;
+}
+
+.completion listbox > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.picker {
+  background-color: #1c1e26;
+  color: #fadad1;
+  border: 1px solid #26bbd9;
+  border-radius: 0;
+  padding: 0;
+}
+
+.picker-title {
+  color: #26bbd9;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 14px;
+  padding: 2px 6px 0 6px;
+}
+
+.picker-prompt {
+  color: #ee64ac;
+  font-family: "CaskaydiaMono Nerd Font", monospace;
+  font-size: 19px;
+  padding: 0 0 0 6px;
+}
+
+.picker entry {
+  font-size: 19px;
+  border: none;
+  border-bottom: 1px solid alpha(#26bbd9, 0.45);
+  padding: 4px 6px;
+}
+
+.picker listview {
+  background-color: transparent;
+  color: #fadad1;
+  margin-top: 0;
+}
+
+.picker listview > row {
+  border-radius: 0;
+  padding: 1px 6px;
+}
+
+.picker listview > row:hover {
+  background-color: #2e303e;
+}
+
+.picker listview > row:selected {
+  background-color: #ee64ac;
+  color: #1c1e26;
+}
+
+.picker-detail {
+  color: #6c6f93;
+}
+
+.picker listview > row:selected .picker-detail {
+  color: alpha(#1c1e26, 0.65);
+}
+
+.picker listview > row:selected .row-cursor {
+  color: #1c1e26;
+}
+
+tooltip {
+  background-color: #1c1e26;
+  color: #fadad1;
+  border: 1px solid #26bbd9;
+  border-radius: 0;
+}

@@ -76,3 +76,28 @@ fn the_classic_sheet_is_untouched_by_the_new_arm() {
     let css = theme.to_gtk_css();
     assert!(css.contains("border-radius: 3px"), "classic keeps its corners");
 }
+
+#[test]
+fn the_tui_sheet_dresses_every_widget_class_the_app_uses() {
+    let css = tui("retro82", Mode::Dark).to_gtk_css();
+    for class in [
+        ".rail", ".rail-button", ".font-list", ".settings", ".settings-label",
+        ".settings-close", ".keysheet-heading", ".keysheet-keys", ".theme-button",
+        ".theme-name", ".conflict", ".conflict-header", ".conflict-title",
+        ".conflict-body", ".conflict-actions", ".status-size", ".status-git",
+        ".status-broken", ".backlinks", ".backlinks-header", ".search-results",
+        ".panel-back", ".tags-heading", ".tag-row", ".search-heading",
+        ".search-name", ".search-folder", ".search-count", ".search-snippet",
+        ".completion", ".picker", ".picker-detail", ".panel-bar", ".picker-title",
+        ".picker-prompt", ".row-cursor",
+    ] {
+        assert!(css.contains(class), "the TUI sheet says nothing about {class}");
+    }
+}
+
+#[test]
+fn the_tui_row_cursor_inverts_on_the_selected_row() {
+    let theme = tui("retro82", Mode::Dark);
+    let css = theme.to_gtk_css();
+    assert!(css.contains(".search-results > row:selected .row-cursor"));
+}
