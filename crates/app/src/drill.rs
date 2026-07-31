@@ -43,6 +43,8 @@ pub struct Panel {
     note_scroller: ScrolledWindow,
     /// Name behind each row of the top list, parallel to the rows.
     names: RefCell<Vec<String>>,
+    /// Use count behind each row of the top list, parallel to `names`.
+    top_counts: RefCell<Vec<i64>>,
     view: RefCell<View>,
     /// The visual language the page is drawn in.
     style: Cell<Style>,
@@ -117,6 +119,7 @@ impl Panel {
             notes,
             note_scroller,
             names: RefCell::new(Vec::new()),
+            top_counts: RefCell::new(Vec::new()),
             view: RefCell::new(View::Top),
             style: Cell::new(Style::Classic),
             last_heading: RefCell::new(initial_heading),
@@ -128,6 +131,20 @@ impl Panel {
             let name = chosen.names.borrow().get(index).cloned();
             if let Some(name) = name {
                 on_pick(&name);
+            }
+        });
+
+        let cursored = Rc::clone(&panel);
+        panel.top.connect_row_selected(move |rows, selected| {
+            let style = cursored.style.get();
+            if style != Style::Tui {
+                return;
+            }
+            let mut index = 0;
+            while let Some(row) = rows.row_at_index(index) {
+                let here = selected.is_some_and(|chosen| chosen == &row);
+                crate::results::set_row_cursor(&row, crate::style::cursor(style, here));
+                index += 1;
             }
         });
 
@@ -145,10 +162,15 @@ impl Panel {
         self.notes.set_accent(accent);
     }
 
-    /// Redraws the page in `style`.
+    /// Redraws the page in `style`. The top list is rebuilt too, since a live
+    /// switch must add or remove its cursor column.
     pub fn set_style(&self, style: Style) {
+        if self.style.get() == style {
+            return;
+        }
         self.style.set(style);
         self.notes.set_style(style);
+        self.rebuild_top_rows();
         let heading = self.last_heading.borrow().clone();
         self.write_heading(heading);
     }
@@ -173,15 +195,32 @@ impl Panel {
     /// The selected name is kept across the redraw where it survives, so a link
     /// breaking elsewhere does not lose the row being read.
     pub fn show_top(&self, counts: &[(String, i64)]) {
+        *self.names.borrow_mut() = counts.iter().map(|(name, _)| name.clone()).collect();
+        *self.top_counts.borrow_mut() = counts.iter().map(|(_, uses)| *uses).collect();
+        self.rebuild_top_rows();
+
+        *self.view.borrow_mut() = View::Top;
+        self.write_heading(heading_text(self.kind, &View::Top, counts.len()));
+        self.top_scroller.set_visible(true);
+        self.note_scroller.set_visible(false);
+    }
+
+    /// Rebuilds the top list's rows from `names` and `top_counts`, keeping the
+    /// selected name and focus where they survive.
+    ///
+    /// Shared by `show_top` and `set_style`: a style change adds or removes the
+    /// row cursor, which is part of the row's structure, not just its text.
+    fn rebuild_top_rows(&self) {
         let was_selected = self.selected_name();
         let had_focus = crate::results::holds_focus_widget(&self.root);
         while let Some(child) = self.top.first_child() {
             self.top.remove(&child);
         }
-        for (name, uses) in counts {
-            self.top.append(&top_row(self.kind, name, *uses));
+        let names = self.names.borrow().clone();
+        let counts = self.top_counts.borrow().clone();
+        for (name, uses) in names.iter().zip(counts.iter()) {
+            self.top.append(&top_row(self.kind, self.style.get(), name, *uses));
         }
-        *self.names.borrow_mut() = counts.iter().map(|(name, _)| name.clone()).collect();
         let restored = was_selected.and_then(|name| self.row_named(&name));
         if let Some(row) = &restored {
             self.top.select_row(Some(row));
@@ -190,11 +229,6 @@ impl Panel {
             self.top.select_row(Some(&row));
             crate::results::set_focus_widget(&row);
         }
-
-        *self.view.borrow_mut() = View::Top;
-        self.write_heading(heading_text(self.kind, &View::Top, counts.len()));
-        self.top_scroller.set_visible(true);
-        self.note_scroller.set_visible(false);
     }
 
     /// Shows the notes behind `name`.
@@ -262,10 +296,16 @@ impl Panel {
     }
 }
 
-/// One top row: the name, and how many notes are behind it.
-fn top_row(kind: Kind, name: &str, uses: i64) -> gtk::Box {
+/// One top row: the cursor (in TUI), the name, and how many notes are behind it.
+fn top_row(kind: Kind, style: Style, name: &str, uses: i64) -> gtk::Box {
     let row = gtk::Box::new(Orientation::Horizontal, 8);
     row.add_css_class("tag-row");
+    let mark = crate::style::cursor(style, false);
+    if !mark.is_empty() {
+        let cursor = gtk::Label::builder().xalign(0.0).label(mark).build();
+        cursor.add_css_class("row-cursor");
+        row.append(&cursor);
+    }
     let label = gtk::Label::builder()
         .xalign(0.0)
         .ellipsize(gtk::pango::EllipsizeMode::Middle)

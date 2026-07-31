@@ -199,7 +199,7 @@ pub fn set_focus_widget(row: &gtk::ListBoxRow) {
 }
 
 /// Rewrites the cursor label of one result row, where it has one.
-fn set_row_cursor(row: &gtk::ListBoxRow, mark: &str) {
+pub(crate) fn set_row_cursor(row: &gtk::ListBoxRow, mark: &str) {
     let Some(cursor) = row
         .child()
         .and_downcast::<gtk::Box>()
