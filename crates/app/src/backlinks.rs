@@ -8,6 +8,8 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{Orientation, ScrolledWindow};
 
+use jotter_theming::Style;
+
 use crate::results::{Hit, List};
 use crate::search::Snippet;
 
@@ -19,6 +21,8 @@ pub struct Strip {
     results: Rc<List>,
     /// What the user wants, which survives a note that has nothing to show.
     wanted: Cell<bool>,
+    /// The visual language the strip is drawn in.
+    style: Cell<Style>,
 }
 
 impl Strip {
@@ -63,6 +67,7 @@ impl Strip {
             revealer,
             results,
             wanted: Cell::new(expanded),
+            style: Cell::new(Style::Classic),
         });
 
         let toggled = Rc::clone(&strip);
@@ -99,12 +104,20 @@ impl Strip {
         let count = self.results.len();
         let showing = self.wanted.get() && count > 0;
         self.revealer.set_reveal_child(showing);
-        self.header.set_label(&header_text(count, showing));
+        self.header
+            .set_label(&crate::style::heading(self.style.get(), &header_text(count, showing)));
     }
 
     /// Recolors the matched words after a theme change.
     pub fn set_accent(&self, accent: &str) {
         self.results.set_accent(accent);
+    }
+
+    /// Redraws the strip in `style`.
+    pub fn set_style(&self, style: Style) {
+        self.style.set(style);
+        self.results.set_style(style);
+        self.redraw();
     }
 
     /// Replaces the listed backlinks, keeping the strip open if it was.

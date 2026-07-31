@@ -3262,8 +3262,14 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
 /// The dress is CSS and lands with the provider; these are widget contents, so
 /// they are rewritten here. Idempotent: `apply_theme` runs on every repaint.
 fn restyle(state: &Rc<State>) {
+    let style = state.theme.borrow().style;
     refresh_vault_name(state);
     rebuild_tree(state);
+    state.search_panel.set_style(style);
+    state.tags_panel.set_style(style);
+    state.report_panel.set_style(style);
+    state.git_panel.set_style(style);
+    state.backlinks.set_style(style);
 }
 
 /// Sets the vault-name label from the open session, styled for the active dress.

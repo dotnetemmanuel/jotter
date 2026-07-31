@@ -3,10 +3,13 @@
 //! Read-only by design. Sync commits everything, so a staging control here would
 //! be a switch that changes nothing.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{Orientation, ScrolledWindow, gdk, glib};
+
+use jotter_theming::Style;
 
 use crate::results::{Hit, List};
 
@@ -16,14 +19,19 @@ pub struct Panel {
     back: gtk::Button,
     heading: gtk::Label,
     changed: Rc<List>,
+    /// The visual language the page is drawn in.
+    style: Cell<Style>,
+    /// The heading text as last computed, unstyled, so a style change can redo it.
+    last_heading: RefCell<String>,
 }
 
 impl Panel {
     /// Builds the page. Rows open the note they name.
     pub fn new<A: Fn(&str, i32) + 'static>(accent: &str, on_open: A) -> Rc<Self> {
+        let initial_heading = heading_text(0);
         let heading = gtk::Label::builder()
             .xalign(0.0)
-            .label(heading_text(0))
+            .label(&initial_heading)
             .build();
         heading.add_css_class("tags-heading");
 
@@ -37,6 +45,7 @@ impl Panel {
         back.add_css_class("panel-back");
 
         let bar = gtk::Box::new(Orientation::Horizontal, 4);
+        bar.add_css_class("panel-bar");
         bar.set_margin_start(6);
         bar.set_margin_top(6);
         bar.set_margin_bottom(4);
@@ -59,6 +68,8 @@ impl Panel {
             back,
             heading,
             changed,
+            style: Cell::new(Style::Classic),
+            last_heading: RefCell::new(initial_heading),
         })
     }
 
@@ -71,6 +82,14 @@ impl Panel {
     /// Recolors after a theme change.
     pub fn set_accent(&self, accent: &str) {
         self.changed.set_accent(accent);
+    }
+
+    /// Redraws the page in `style`.
+    pub fn set_style(&self, style: Style) {
+        self.style.set(style);
+        self.changed.set_style(style);
+        let heading = self.last_heading.borrow().clone();
+        self.write_heading(heading);
     }
 
     /// Whether focus is anywhere in the page.
@@ -92,7 +111,7 @@ impl Panel {
             })
             .collect();
         self.changed.set_hits(&hits);
-        self.heading.set_text(&heading_text(changed.len()));
+        self.write_heading(heading_text(changed.len()));
     }
 
     /// Lists the conflicted notes and how far each one has been answered.
@@ -110,7 +129,7 @@ impl Panel {
             })
             .collect();
         self.changed.set_hits(&hits);
-        self.heading.set_text(&conflict_heading(files.len()));
+        self.write_heading(conflict_heading(files.len()));
     }
 
     /// Puts focus on the list so the arrows work straight away.
@@ -135,6 +154,12 @@ impl Panel {
             glib::Propagation::Proceed
         });
         self.root.add_controller(keys);
+    }
+
+    /// Sets the heading label styled for the active dress, and remembers it unstyled.
+    fn write_heading(&self, text: String) {
+        self.heading.set_text(&crate::style::heading(self.style.get(), &text));
+        *self.last_heading.borrow_mut() = text;
     }
 }
 

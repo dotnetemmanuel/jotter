@@ -3,11 +3,13 @@
 //! Tags and broken links are the same page with different words, so they share
 //! it. Names are listed alphabetically, so one stays where you last saw it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::{Orientation, ScrolledWindow, gdk, glib};
+
+use jotter_theming::Style;
 
 use crate::results::{Hit, List};
 
@@ -42,6 +44,10 @@ pub struct Panel {
     /// Name behind each row of the top list, parallel to the rows.
     names: RefCell<Vec<String>>,
     view: RefCell<View>,
+    /// The visual language the page is drawn in.
+    style: Cell<Style>,
+    /// The heading text as last computed, unstyled, so a style change can redo it.
+    last_heading: RefCell<String>,
 }
 
 impl Panel {
@@ -53,9 +59,10 @@ impl Panel {
         on_pick: T,
         on_note: N,
     ) -> Rc<Self> {
+        let initial_heading = heading_text(kind, &View::Top, 0);
         let heading = gtk::Label::builder()
             .xalign(0.0)
-            .label(heading_text(kind, &View::Top, 0))
+            .label(&initial_heading)
             .build();
         heading.add_css_class("tags-heading");
 
@@ -71,6 +78,7 @@ impl Panel {
         back.add_css_class("panel-back");
 
         let bar = gtk::Box::new(Orientation::Horizontal, 4);
+        bar.add_css_class("panel-bar");
         bar.set_margin_start(6);
         bar.set_margin_top(6);
         bar.set_margin_bottom(4);
@@ -110,6 +118,8 @@ impl Panel {
             note_scroller,
             names: RefCell::new(Vec::new()),
             view: RefCell::new(View::Top),
+            style: Cell::new(Style::Classic),
+            last_heading: RefCell::new(initial_heading),
         });
 
         let chosen = Rc::clone(&panel);
@@ -133,6 +143,14 @@ impl Panel {
     /// Recolors matched text after a theme change.
     pub fn set_accent(&self, accent: &str) {
         self.notes.set_accent(accent);
+    }
+
+    /// Redraws the page in `style`.
+    pub fn set_style(&self, style: Style) {
+        self.style.set(style);
+        self.notes.set_style(style);
+        let heading = self.last_heading.borrow().clone();
+        self.write_heading(heading);
     }
 
     /// Whether focus is anywhere in the page.
@@ -174,8 +192,7 @@ impl Panel {
         }
 
         *self.view.borrow_mut() = View::Top;
-        self.heading
-            .set_text(&heading_text(self.kind, &View::Top, counts.len()));
+        self.write_heading(heading_text(self.kind, &View::Top, counts.len()));
         self.top_scroller.set_visible(true);
         self.note_scroller.set_visible(false);
     }
@@ -184,8 +201,7 @@ impl Panel {
     pub fn show_notes(&self, name: &str, hits: &[Hit]) {
         self.notes.set_hits(hits);
         let view = View::Notes(name.to_string());
-        self.heading
-            .set_text(&heading_text(self.kind, &view, hits.len()));
+        self.write_heading(heading_text(self.kind, &view, hits.len()));
         *self.view.borrow_mut() = view;
         self.top_scroller.set_visible(false);
         self.note_scroller.set_visible(true);
@@ -237,6 +253,12 @@ impl Panel {
     fn row_named(&self, name: &str) -> Option<gtk::ListBoxRow> {
         let index = self.names.borrow().iter().position(|held| held == name)?;
         self.top.row_at_index(i32::try_from(index).ok()?)
+    }
+
+    /// Sets the heading label styled for the active dress, and remembers it unstyled.
+    fn write_heading(&self, text: String) {
+        self.heading.set_text(&crate::style::heading(self.style.get(), &text));
+        *self.last_heading.borrow_mut() = text;
     }
 }
 

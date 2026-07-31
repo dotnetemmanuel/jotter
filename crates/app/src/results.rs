@@ -2,11 +2,13 @@
 //! a note at one of them. Used by search, backlinks, tags, and the broken-link
 //! report.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk::Orientation;
+
+use jotter_theming::Style;
 
 use crate::search::Snippet;
 
@@ -30,6 +32,8 @@ pub struct List {
     accent: RefCell<String>,
     /// The current hits, kept so a theme change can redraw them.
     hits: RefCell<Vec<Hit>>,
+    /// The visual language the rows are drawn in.
+    style: Cell<Style>,
 }
 
 impl List {
@@ -44,6 +48,7 @@ impl List {
             targets: RefCell::new(Vec::new()),
             accent: RefCell::new(accent.to_string()),
             hits: RefCell::new(Vec::new()),
+            style: Cell::new(Style::Classic),
         });
 
         let activated = Rc::clone(&shared);
@@ -52,6 +57,20 @@ impl List {
             let target = activated.targets.borrow().get(index).cloned();
             if let Some((path, line)) = target {
                 on_activate(&path, line);
+            }
+        });
+
+        let cursored = Rc::clone(&shared);
+        shared.rows.connect_row_selected(move |rows, selected| {
+            let style = cursored.style.get();
+            if style != Style::Tui {
+                return;
+            }
+            let mut index = 0;
+            while let Some(row) = rows.row_at_index(index) {
+                let here = selected.is_some_and(|chosen| chosen == &row);
+                set_row_cursor(&row, crate::style::cursor(style, here));
+                index += 1;
             }
         });
 
@@ -98,6 +117,16 @@ impl List {
         self.set_hits(&hits);
     }
 
+    /// Redraws the rows in `style`, which changes the row cursor.
+    pub fn set_style(&self, style: Style) {
+        if self.style.get() == style {
+            return;
+        }
+        self.style.set(style);
+        let hits = self.hits.borrow().clone();
+        self.set_hits(&hits);
+    }
+
     /// Replaces the rows with `hits`, keeping the selected line where it survives.
     pub fn set_hits(&self, hits: &[Hit]) {
         let was_selected = self.selected_target();
@@ -108,8 +137,12 @@ impl List {
         let mut targets = Vec::new();
 
         for hit in hits {
-            self.rows
-                .append(&heading_row(&hit.path, hit.snippets.len(), hit.badge.as_deref()));
+            self.rows.append(&heading_row(
+                self.style.get(),
+                &hit.path,
+                hit.snippets.len(),
+                hit.badge.as_deref(),
+            ));
             targets.push((hit.path.clone(), 0));
             for snippet in &hit.snippets {
                 self.rows.append(&snippet_row(snippet, &self.accent.borrow()));
@@ -165,6 +198,21 @@ pub fn set_focus_widget(row: &gtk::ListBoxRow) {
     }
 }
 
+/// Rewrites the cursor label of one result row, where it has one.
+fn set_row_cursor(row: &gtk::ListBoxRow, mark: &str) {
+    let Some(cursor) = row
+        .child()
+        .and_downcast::<gtk::Box>()
+        .and_then(|line| line.first_child())
+        .and_downcast::<gtk::Label>()
+    else {
+        return;
+    };
+    if cursor.has_css_class("row-cursor") {
+        cursor.set_text(mark);
+    }
+}
+
 /// Folder and bare name of a note path, for the two-tone result heading.
 fn split_path(path: &str) -> (String, String) {
     let (folder, file) = path.rsplit_once('/').unwrap_or(("", path));
@@ -173,11 +221,18 @@ fn split_path(path: &str) -> (String, String) {
 }
 
 /// The note line of a result group.
-fn heading_row(path: &str, matches: usize, badge: Option<&str>) -> gtk::Box {
+fn heading_row(style: Style, path: &str, matches: usize, badge: Option<&str>) -> gtk::Box {
     let (folder, stem) = split_path(path);
 
     let row = gtk::Box::new(Orientation::Horizontal, 6);
     row.add_css_class("search-heading");
+
+    let mark = crate::style::cursor(style, false);
+    if !mark.is_empty() {
+        let cursor = gtk::Label::builder().xalign(0.0).label(mark).build();
+        cursor.add_css_class("row-cursor");
+        row.append(&cursor);
+    }
 
     let name = gtk::Label::builder().xalign(0.0).label(&stem).build();
     name.add_css_class("search-name");
