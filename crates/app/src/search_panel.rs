@@ -6,6 +6,8 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{Orientation, ScrolledWindow, gdk, glib};
 
+use jotter_theming::Style;
+
 use crate::results::{Hit, List};
 
 /// The search sidebar page.
@@ -39,6 +41,7 @@ impl Panel {
         back.add_css_class("panel-back");
 
         let bar = gtk::Box::new(Orientation::Horizontal, 4);
+        bar.add_css_class("panel-bar");
         bar.set_margin_start(6);
         bar.set_margin_end(8);
         bar.set_margin_top(6);
@@ -84,6 +87,11 @@ impl Panel {
     /// Recolors the matched words after a theme change.
     pub fn set_accent(&self, accent: &str) {
         self.results.set_accent(accent);
+    }
+
+    /// Redraws the panel in `style`.
+    pub fn set_style(&self, style: Style) {
+        self.results.set_style(style);
     }
 
     /// Whether focus is anywhere in the panel, entry or results.
