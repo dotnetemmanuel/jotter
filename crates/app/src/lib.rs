@@ -483,6 +483,10 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         Startup::File(path) => open_single_file(&state, path.as_deref()),
     }
 
+    // Widgets are built with classic idioms regardless of the resolved style,
+    // so a cold start applies the real one once before the window shows.
+    restyle(&state);
+
     wire_actions(app, &state);
 
     // The strip sits under both editor and preview, so it shows in either mode.
