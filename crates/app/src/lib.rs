@@ -1084,8 +1084,7 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
 fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
     let factory = SignalListItemFactory::new();
 
-    // Handlers on the bound row, dropped on unbind: a rebind would otherwise
-    // leave the old row still writing into this widget.
+    // Disconnected on unbind so a recycled row cannot write into a widget it no longer owns.
     let bound: Rc<RefCell<HashMap<gtk::ListItem, (TreeListRow, gtk::glib::SignalHandlerId)>>> =
         Rc::new(RefCell::new(HashMap::new()));
 
@@ -3260,7 +3259,8 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
 /// Re-applies the character-level idioms after a style change.
 ///
 /// The dress is CSS and lands with the provider; these are widget contents, so
-/// they are rewritten here. Idempotent: `apply_theme` runs on every repaint.
+/// they are rewritten here. Idempotent: `apply_theme` calls it on every theme,
+/// mode, font, or style change.
 fn restyle(state: &Rc<State>) {
     refresh_vault_name(state);
     rebuild_tree(state);
