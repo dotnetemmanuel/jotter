@@ -50,6 +50,9 @@ pub struct Appearance {
     /// Light or dark, as the theme spells it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Which visual language the chrome is drawn in: classic or tui.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
     /// Font family for the editor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub editor_font: Option<String>,

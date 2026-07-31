@@ -4,7 +4,7 @@
 //! user overrode. Settings changes are applied here instead, so an untouched
 //! config produces exactly the theme the file describes.
 
-use jotter_theming::{Mode, Theme, ThemeFile};
+use jotter_theming::{Mode, Style, Theme, ThemeFile};
 
 use crate::config::Appearance;
 
@@ -14,6 +14,11 @@ pub const MAX_SIZE: u32 = 32;
 
 /// Applies the user's choices to `theme`, leaving untouched fields alone.
 pub fn apply(theme: &mut Theme, appearance: &Appearance) {
+    theme.style = style_of(appearance);
+    if theme.style == Style::Tui {
+        // The theme's own font: the rail draws Nerd Font glyphs a chosen font may lack.
+        theme.typography.ui_font = theme.typography.editor_font.clone();
+    }
     if let Some(font) = font_of(appearance.editor_font.as_deref()) {
         theme.typography.editor_font = font;
     }
@@ -80,6 +85,22 @@ pub fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
+/// The style the config asks for, defaulting to classic.
+#[must_use]
+pub fn style_of(appearance: &Appearance) -> Style {
+    match appearance.style.as_deref() {
+        Some("tui") => Style::Tui,
+        _ => Style::Classic,
+    }
+}
+
+/// How a style is written in the config.
+#[must_use]
+#[allow(dead_code)] // wired into the settings window in Task 4
+pub fn style_name(style: Style) -> &'static str {
+    style.as_str()
+}
+
 /// Resolves `file` for `appearance`, then applies the user's overrides.
 ///
 /// # Errors
@@ -94,7 +115,7 @@ pub fn resolve(file: &ThemeFile, appearance: &Appearance) -> Result<Theme, jotte
 mod tests {
     use super::{MAX_SIZE, MIN_SIZE, apply, mode_name, mode_of};
     use crate::config::Appearance;
-    use jotter_theming::Mode;
+    use jotter_theming::{Mode, Style};
 
     fn theme() -> jotter_theming::Theme {
         jotter_theming::bundled::default_theme().unwrap()
@@ -228,5 +249,56 @@ mod tests {
             ..Appearance::default()
         };
         assert_eq!(mode_of(&nonsense), jotter_theming::bundled::DEFAULT_MODE);
+    }
+
+    #[test]
+    fn the_style_round_trips_through_the_config() {
+        let tui = Appearance {
+            style: Some(super::style_name(Style::Tui).to_string()),
+            ..Appearance::default()
+        };
+        assert_eq!(super::style_of(&tui), Style::Tui);
+        assert_eq!(super::style_of(&Appearance::default()), Style::Classic);
+    }
+
+    #[test]
+    fn an_unknown_style_falls_back_rather_than_failing() {
+        let nonsense = Appearance {
+            style: Some("ansi-art".to_string()),
+            ..Appearance::default()
+        };
+        assert_eq!(super::style_of(&nonsense), Style::Classic);
+    }
+
+    #[test]
+    fn the_tui_ui_font_is_the_theme_editor_font_not_the_chosen_one() {
+        let mut applied = theme();
+        let theme_editor_font = applied.typography.editor_font.clone();
+        apply(
+            &mut applied,
+            &Appearance {
+                style: Some("tui".to_string()),
+                editor_font: Some("Iosevka".to_string()),
+                ..Appearance::default()
+            },
+        );
+        assert_eq!(applied.style, Style::Tui);
+        assert_eq!(applied.typography.ui_font, theme_editor_font);
+        assert_eq!(applied.typography.editor_font, "Iosevka");
+    }
+
+    #[test]
+    fn classic_leaves_the_ui_font_alone() {
+        let untouched = theme();
+        let mut applied = theme();
+        apply(
+            &mut applied,
+            &Appearance {
+                editor_font: Some("Iosevka".to_string()),
+                ..Appearance::default()
+            },
+        );
+        assert_eq!(applied.style, Style::Classic);
+        assert_eq!(applied.typography.ui_font, untouched.typography.ui_font);
     }
 }
