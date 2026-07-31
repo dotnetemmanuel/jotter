@@ -51,7 +51,7 @@ use gtk::{
 use jotter_editor::Editor;
 use jotter_index::Index;
 use jotter_preview::Preview;
-use jotter_theming::{Mode, Theme, ThemeFile};
+use jotter_theming::{Mode, Style, Theme, ThemeFile};
 use jotter_vault::{Vault, VaultChange, WatchGuard};
 
 use config::Config;
@@ -874,9 +874,7 @@ fn open_vault_now(state: &Rc<State>, root: &Path, note: Option<&Path>) {
         is_git: jotter_git::Repo::discover(root).is_some(),
     }));
 
-    state.vault_name.set_text(&vaults::known(&[root.display().to_string()])
-        .first()
-        .map_or_else(|| root.display().to_string(), |vault| vault.name.clone()));
+    refresh_vault_name(state);
     state.vault_name.set_visible(true);
 
     // Written whether or not the vault is a repo: one that becomes one later is
@@ -1085,12 +1083,21 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
 /// The factory that builds and fills one tree row.
 fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
     let factory = SignalListItemFactory::new();
+
+    // Handlers on the bound row, dropped on unbind: a rebind would otherwise
+    // leave the old row still writing into this widget.
+    let bound: Rc<RefCell<HashMap<gtk::ListItem, (TreeListRow, gtk::glib::SignalHandlerId)>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
     let setup_state = Rc::clone(state);
     factory.connect_setup(move |_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
         let line = gtk::Box::new(Orientation::Horizontal, 6);
+        let gutter = Label::builder().halign(gtk::Align::Start).build();
+        gutter.add_css_class("tree-cursor");
+        line.append(&gutter);
         line.append(&Label::builder().halign(gtk::Align::Start).build());
         let title = Label::builder()
             .halign(gtk::Align::Start)
@@ -1102,8 +1109,14 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
         expander.set_child(Some(&line));
         wire_row_drag(&setup_state, &expander);
         item.set_child(Some(&expander));
+
+        let selected_state = Rc::clone(&setup_state);
+        item.connect_notify_local(Some("selected"), move |item, _| {
+            refresh_gutter(&selected_state, item);
+        });
     });
     let bind_state = Rc::clone(state);
+    let binding = Rc::clone(&bound);
     factory.connect_bind(move |_, item| {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
@@ -1121,8 +1134,9 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
         let Some(line) = expander.child().and_downcast::<gtk::Box>() else {
             return;
         };
-        let (Some(name), Some(title)) = (
+        let (Some(gutter), Some(name), Some(title)) = (
             line.first_child().and_downcast::<Label>(),
+            line.first_child().and_then(|first| first.next_sibling()).and_downcast::<Label>(),
             line.last_child().and_downcast::<Label>(),
         ) else {
             return;
@@ -1145,8 +1159,61 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
         } else {
             name.add_css_class("tree-inert");
         }
+
+        let style = bind_state.theme.borrow().style;
+        expander.set_hide_expander(style == Style::Tui);
+        expander.set_indent_for_icon(style != Style::Tui);
+        gutter.set_visible(style == Style::Tui);
+        gutter.set_text(&crate::style::tree_gutter(
+            style,
+            row.is_expandable(),
+            row.is_expanded(),
+            item.is_selected(),
+        ));
+
+        let expanding = Rc::clone(&bind_state);
+        let listed = item.clone();
+        let handler = row.connect_notify_local(Some("expanded"), move |_, _| {
+            refresh_gutter(&expanding, &listed);
+        });
+        if let Some((old_row, old)) = binding.borrow_mut().insert(item.clone(), (row.clone(), handler))
+        {
+            old_row.disconnect(old);
+        }
+    });
+    let unbinding = Rc::clone(&bound);
+    factory.connect_unbind(move |_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        if let Some((row, handler)) = unbinding.borrow_mut().remove(item) {
+            row.disconnect(handler);
+        }
     });
     factory
+}
+
+/// Rewrites one tree row's gutter from the row's current state.
+fn refresh_gutter(state: &Rc<State>, item: &gtk::ListItem) {
+    let Some(row) = item.item().and_downcast::<TreeListRow>() else {
+        return;
+    };
+    let Some(gutter) = item
+        .child()
+        .and_downcast::<TreeExpander>()
+        .and_then(|expander| expander.child())
+        .and_downcast::<gtk::Box>()
+        .and_then(|line| line.first_child())
+        .and_downcast::<Label>()
+    else {
+        return;
+    };
+    gutter.set_text(&crate::style::tree_gutter(
+        state.theme.borrow().style,
+        row.is_expandable(),
+        row.is_expanded(),
+        item.is_selected(),
+    ));
 }
 
 /// CSS class marking the row a drag is hovering over.
@@ -3187,6 +3254,29 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
         state.preview.rerender_preserving_scroll(&rendered.html);
     }
     refresh_editor_links(state);
+    restyle(state);
+}
+
+/// Re-applies the character-level idioms after a style change.
+///
+/// The dress is CSS and lands with the provider; these are widget contents, so
+/// they are rewritten here. Idempotent: `apply_theme` runs on every repaint.
+fn restyle(state: &Rc<State>) {
+    refresh_vault_name(state);
+    rebuild_tree(state);
+}
+
+/// Sets the vault-name label from the open session, styled for the active dress.
+fn refresh_vault_name(state: &Rc<State>) {
+    let session = state.session.borrow();
+    let Some(session) = session.as_ref() else {
+        return;
+    };
+    let root = session.vault.root();
+    let name = vaults::known(&[root.display().to_string()])
+        .first()
+        .map_or_else(|| root.display().to_string(), |vault| vault.name.clone());
+    state.vault_name.set_text(&style::heading(state.theme.borrow().style, &name));
 }
 
 /// Render the editor text with the active theme and the vault's link resolver.

@@ -3,7 +3,7 @@
 //! Pure string work, kept out of the widgets so the idioms can be tested
 //! without a display.
 
-// No caller yet; wired up starting Task 6.
+// button and segment have no caller yet; wired up in Tasks 8 and 9.
 #![allow(dead_code)]
 
 use jotter_theming::Style;
