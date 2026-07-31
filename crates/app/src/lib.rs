@@ -24,6 +24,7 @@ mod results;
 mod search;
 mod search_panel;
 mod settings;
+mod style;
 mod switcher;
 mod themes;
 mod title;
