@@ -51,14 +51,16 @@ pub struct Row {
 
 /// Opens the picker over `overlay`, seeded with `initial_query`.
 ///
-/// `source` re-runs on every keystroke and returns the rows to show. `activate`
-/// receives the key of the chosen row, `on_close` runs after the panel goes away
-/// either way, so callers can restore focus.
+/// `source` re-runs on every keystroke and returns the rows to show. `title`
+/// re-runs on every keystroke too, so a picker whose mode can change as the
+/// user types (the switcher turning into the palette) keeps an honest
+/// heading. `activate` receives the key of the chosen row, `on_close` runs
+/// after the panel goes away either way, so callers can restore focus.
 #[allow(clippy::too_many_arguments, reason = "each argument is a distinct collaborator, not a bundle waiting to happen")]
-pub fn open<S, A, C>(
+pub fn open<T, S, A, C>(
     overlay: &gtk::Overlay,
     style: Style,
-    title: &str,
+    title: T,
     placeholder: &str,
     initial_query: &str,
     source: S,
@@ -66,6 +68,7 @@ pub fn open<S, A, C>(
     on_close: C,
 ) -> Handle
 where
+    T: Fn(&str) -> String + 'static,
     S: Fn(&str) -> Vec<Row> + 'static,
     A: Fn(&str) + 'static,
     C: Fn() + 'static,
@@ -166,13 +169,16 @@ where
 }
 
 /// The floating panel: query entry above a list, centred near the top.
-fn build_panel(
+fn build_panel<T>(
     style: Style,
-    title: &str,
+    title: T,
     placeholder: &str,
     initial_query: &str,
     rows: &Rc<RefCell<Vec<Row>>>,
-) -> (gtk::Box, gtk::Entry, SingleSelection, ListView) {
+) -> (gtk::Box, gtk::Entry, SingleSelection, ListView)
+where
+    T: Fn(&str) -> String + 'static,
+{
     let entry = gtk::Entry::builder()
         .placeholder_text(placeholder)
         .text(initial_query)
@@ -202,7 +208,7 @@ fn build_panel(
     if style == Style::Tui {
         let heading = gtk::Label::builder()
             .xalign(0.0)
-            .label(crate::style::heading(style, title))
+            .label(crate::style::heading(style, &title(initial_query)))
             .build();
         heading.add_css_class("picker-title");
         panel.append(&heading);
@@ -210,10 +216,19 @@ fn build_panel(
         let line = gtk::Box::new(Orientation::Horizontal, 0);
         let prompt = gtk::Label::new(Some(">"));
         prompt.add_css_class("picker-prompt");
+        // A typed leading `>` is itself the prompt, in command mode; the
+        // chrome supplies one only while the query has not claimed it.
+        prompt.set_visible(!initial_query.starts_with('>'));
         line.append(&prompt);
         entry.set_hexpand(true);
         line.append(&entry);
         panel.append(&line);
+
+        entry.connect_changed(move |entry| {
+            let text = entry.text();
+            heading.set_text(&crate::style::heading(style, &title(&text)));
+            prompt.set_visible(!text.starts_with('>'));
+        });
     } else {
         panel.append(&entry);
     }

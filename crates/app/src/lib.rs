@@ -741,7 +741,7 @@ fn pick_vault(state: &Rc<State>) {
     let handle = picker::open(
         &state.overlay,
         state.theme.borrow().style,
-        "Open vault",
+        |_| "Open vault".to_string(),
         "Open which vault?",
         "",
         source,
@@ -2995,10 +2995,12 @@ fn open_picker(state: &Rc<State>, initial_query: &str) {
     let source_mode = Rc::clone(&in_command_mode);
     let activate = Rc::clone(state);
     let restore = Rc::clone(state);
-    let title = if commands::command_query(initial_query).is_some() {
-        "Command palette"
-    } else {
-        "Quick switch"
+    let title = |query: &str| {
+        if commands::command_query(query).is_some() {
+            "Command palette".to_string()
+        } else {
+            "Quick switch".to_string()
+        }
     };
     let handle = picker::open(
         &state.overlay,
