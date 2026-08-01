@@ -131,7 +131,9 @@ impl Popup {
                 .use_markup(true)
                 .label(crate::picker::highlight(&row.label, &row.positions))
                 .build();
-            self.list.append(&label);
+            // Not focusable: a click must leave the caret in the editor.
+            let holder = gtk::ListBoxRow::builder().can_focus(false).child(&label).build();
+            self.list.append(&holder);
         }
         *self.keys.borrow_mut() = rows.iter().map(|row| row.key.clone()).collect();
         self.select(0);
@@ -165,6 +167,15 @@ impl Popup {
         let index = self.list.selected_row()?.index();
         let index = usize::try_from(index).ok()?;
         self.keys.borrow().get(index).cloned()
+    }
+
+    /// Calls `action` when a row is chosen with the pointer, having first made
+    /// that row the selected one so the choice and the selection agree.
+    pub fn connect_activated<F: Fn() + 'static>(&self, action: F) {
+        self.list.connect_row_activated(move |list, row| {
+            list.select_row(Some(row));
+            action();
+        });
     }
 
     fn select(&self, index: i32) {

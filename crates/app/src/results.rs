@@ -234,7 +234,11 @@ fn heading_row(style: Style, path: &str, matches: usize, badge: Option<&str>) ->
         row.append(&cursor);
     }
 
-    let name = gtk::Label::builder().xalign(0.0).label(&stem).build();
+    let name = gtk::Label::builder()
+        .xalign(0.0)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .label(&stem)
+        .build();
     name.add_css_class("search-name");
     row.append(&name);
 

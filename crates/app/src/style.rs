@@ -43,24 +43,53 @@ pub fn cursor(style: Style, selected: bool) -> &'static str {
     }
 }
 
-/// The tree's left gutter: the row cursor, then the folder marker. Files keep
-/// the column so names stay aligned down the tree.
+/// The tree's left gutter, always two columns so names stay aligned down the
+/// tree: a folder shows which way it points, a file shows the row cursor. A
+/// folder says nothing about selection, since its own marker holds the column.
 #[must_use]
 pub fn tree_gutter(style: Style, expandable: bool, expanded: bool, selected: bool) -> String {
     if style != Style::Tui {
         return String::new();
     }
-    let marker = match (expandable, expanded) {
-        (true, true) => "\u{25be}",
-        (true, false) => "\u{25b8}",
-        (false, _) => " ",
-    };
-    format!("{}{marker}", cursor(style, selected))
+    match (expandable, expanded) {
+        (true, true) => " \u{25be}".to_string(),
+        (true, false) => " \u{25b8}".to_string(),
+        (false, _) => format!("{} ", cursor(style, selected)),
+    }
+}
+
+/// The dot joining two shown status bar items.
+pub const JOINER: &str = "\u{b7}";
+
+/// Which joiners of a status bar are on, given which items are shown.
+///
+/// One after every shown item that still has a shown item after it, so a joiner
+/// never leads, trails, or doubles up over a hidden item. Classic joins nothing.
+#[must_use]
+pub fn joiners(style: Style, shown: &[bool]) -> Vec<bool> {
+    let mut on = vec![false; shown.len().saturating_sub(1)];
+    if style != Style::Tui {
+        return on;
+    }
+    for (index, slot) in on.iter_mut().enumerate() {
+        *slot = shown[index] && shown[index + 1..].iter().any(|later| *later);
+    }
+    on
+}
+
+/// The status bar's broken-link item: terse in TUI, a sentence in classic.
+#[must_use]
+pub fn broken_links(style: Style, count: usize) -> String {
+    match (style, count) {
+        (Style::Tui, count) => format!("! {count}"),
+        (Style::Classic, 1) => "1 broken link".to_string(),
+        (Style::Classic, many) => format!("{many} broken links"),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{button, cursor, heading, segment, tree_gutter};
+    use super::{broken_links, button, cursor, heading, joiners, segment, tree_gutter};
     use jotter_theming::Style::{Classic, Tui};
 
     #[test]
@@ -132,8 +161,65 @@ mod tests {
     }
 
     #[test]
-    fn a_selected_tui_row_carries_the_cursor_ahead_of_the_marker() {
-        assert_eq!(tree_gutter(Tui, true, true, true), ">\u{25be}");
+    fn a_selected_tui_file_carries_the_cursor() {
         assert_eq!(tree_gutter(Tui, false, false, true), "> ");
+    }
+
+    #[test]
+    fn a_selected_tui_folder_keeps_its_marker_alone() {
+        assert_eq!(tree_gutter(Tui, true, true, true), " \u{25be}");
+        assert_eq!(tree_gutter(Tui, true, false, true), " \u{25b8}");
+    }
+
+    #[test]
+    fn every_tui_gutter_is_two_columns_wide() {
+        for expandable in [true, false] {
+            for expanded in [true, false] {
+                for selected in [true, false] {
+                    let gutter = tree_gutter(Tui, expandable, expanded, selected);
+                    assert_eq!(gutter.chars().count(), 2, "{gutter:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn classic_joins_nothing() {
+        assert_eq!(joiners(Classic, &[true, true, true]), [false, false]);
+    }
+
+    #[test]
+    fn a_joiner_sits_between_two_shown_items() {
+        assert_eq!(joiners(Tui, &[true, true, true]), [true, true]);
+    }
+
+    #[test]
+    fn a_joiner_never_leads_or_trails() {
+        assert_eq!(joiners(Tui, &[false, true, false]), [false, false]);
+        assert_eq!(joiners(Tui, &[false, true, true]), [false, true]);
+        assert_eq!(joiners(Tui, &[true, true, false]), [true, false]);
+    }
+
+    #[test]
+    fn a_hidden_middle_item_does_not_double_the_joiner() {
+        assert_eq!(joiners(Tui, &[true, false, true]), [true, false]);
+    }
+
+    #[test]
+    fn a_lone_item_is_joined_to_nothing() {
+        assert!(joiners(Tui, &[true]).is_empty());
+        assert!(joiners(Tui, &[]).is_empty());
+    }
+
+    #[test]
+    fn classic_counts_broken_links_in_words() {
+        assert_eq!(broken_links(Classic, 1), "1 broken link");
+        assert_eq!(broken_links(Classic, 4), "4 broken links");
+    }
+
+    #[test]
+    fn a_tui_broken_count_is_terse() {
+        assert_eq!(broken_links(Tui, 1), "! 1");
+        assert_eq!(segment(Tui, &broken_links(Tui, 3)), "[ ! 3 ]");
     }
 }
