@@ -1,8 +1,9 @@
 //! Generate the GTK4 chrome stylesheet for the TUI style.
 //!
-//! A terminal look: square corners, hairline frames drawn in the focus color,
-//! and a monospace UI font. `chrome.radius`, `chrome.border_width`,
-//! `chrome.surface` and `chrome.border` are deliberately unused here.
+//! A terminal look: square corners, frames drawn in the focus color (2px where
+//! one region of the app meets another, a hairline within a region), and a
+//! monospace UI font. `chrome.radius`, `chrome.border_width` and `chrome.border`
+//! are deliberately unused here.
 
 use crate::model::Theme;
 
@@ -16,16 +17,16 @@ impl Theme {
             "/* {name} tui */\n\
 window {{\n  background-color: {bg};\n  color: {text};\n  font-family: {ui_font};\n  font-size: {size}px;\n}}\n\n\
 window.csd {{\n  border-radius: 0;\n}}\n\n\
-headerbar {{\n  background-color: {bg};\n  background-image: none;\n  color: {text};\n  border-bottom: 1px solid {focus};\n  box-shadow: none;\n  padding-left: 0;\n}}\n\n\
-separator {{\n  background-color: alpha({focus}, 0.45);\n  min-height: 1px;\n  min-width: 1px;\n}}\n\n\
-paned > separator {{\n  background-color: alpha({focus}, 0.45);\n  background-image: none;\n  min-width: 1px;\n  min-height: 1px;\n}}\n\n\
+headerbar {{\n  background-color: {bg};\n  background-image: none;\n  color: {text};\n  border-bottom: 2px solid {focus};\n  box-shadow: none;\n  padding-left: 0;\n}}\n\n\
+separator {{\n  background-color: {focus};\n  min-height: 2px;\n  min-width: 2px;\n}}\n\n\
+paned > separator {{\n  background-color: {focus};\n  background-image: none;\n  min-width: 2px;\n  min-height: 2px;\n}}\n\n\
 .sidebar {{\n  background-color: {bg};\n}}\n\n\
 .sidebar listview {{\n  background-color: transparent;\n  color: {text};\n  padding-top: 2px;\n}}\n\n\
 .sidebar listview > row {{\n  border-radius: 0;\n  padding: 1px 6px;\n  margin: 0;\n}}\n\n\
 .sidebar listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .sidebar listview > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
 .sidebar listview > row:selected:hover {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
-.vault-name {{\n  color: {focus};\n  font-size: {small}px;\n  font-weight: bold;\n  padding: 6px 8px 2px 8px;\n  border-bottom: 1px solid alpha({focus}, 0.45);\n}}\n\n\
+.vault-name {{\n  color: {focus};\n  font-size: {small}px;\n  font-weight: bold;\n  padding: 6px 8px 4px 8px;\n  border-bottom: 2px solid {focus};\n}}\n\n\
 .tree-cursor {{\n  color: {accent};\n}}\n\n\
 .sidebar listview > row:selected .tree-cursor {{\n  color: {bg};\n}}\n\n\
 .tree-inert {{\n  color: {muted};\n  opacity: 0.55;\n}}\n\n\
@@ -52,7 +53,7 @@ scrollbar {{\n  background-color: transparent;\n  border: none;\n}}\n\n\
 scrollbar slider {{\n  background-color: {muted};\n  border: none;\n  border-radius: 0;\n  min-width: 6px;\n  min-height: 6px;\n  margin: 0;\n}}\n\n\
 scrollbar slider:hover {{\n  background-color: {focus};\n}}\n\n\
 popover > contents {{\n  background-color: {bg};\n  color: {text};\n  border: 1px solid {focus};\n  border-radius: 0;\n  box-shadow: none;\n}}\n\n\
-.picker-scrim {{\n  background-color: alpha({bg}, 0.6);\n}}\n",
+.picker-scrim {{\n  background-color: alpha({bg}, 0.78);\n}}\n",
             name = self.scheme_name(),
             bg = c.background,
             overlay = c.overlay,
@@ -110,11 +111,12 @@ popover > contents {{\n  background-color: {bg};\n  color: {text};\n  border: 1p
 .status-size, .status-git, .status-broken {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  font-family: {ui_font};\n  font-size: {small}px;\n  padding: 0 6px;\n  min-height: 0;\n}}\n\n\
 .status-size, .status-git {{\n  color: {muted};\n}}\n\n\
 .status-broken {{\n  color: {danger};\n}}\n\n\
+.status-joiner {{\n  color: alpha({muted}, 0.6);\n  font-family: {ui_font};\n  font-size: {small}px;\n  padding: 0;\n}}\n\n\
 .status-size:hover, .status-git:hover, .status-broken:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .backlinks {{\n  background-color: {bg};\n}}\n\n\
 .backlinks-header {{\n  background: none;\n  border: none;\n  box-shadow: none;\n  color: {focus};\n  font-family: {ui_font};\n  font-size: {small}px;\n  padding: 2px 8px;\n  min-height: 0;\n}}\n\n\
 .backlinks-header:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
-.panel-bar {{\n  border-bottom: 1px solid alpha({focus}, 0.45);\n}}\n\n\
+.panel-bar {{\n  padding-bottom: 6px;\n  border-bottom: 2px solid {focus};\n}}\n\n\
 .search-results {{\n  background-color: transparent;\n  color: {text};\n}}\n\n\
 .search-results > row {{\n  border-radius: 0;\n  padding: 0 6px;\n  margin: 0;\n}}\n\n\
 .search-results > row:hover {{\n  background-color: {overlay};\n}}\n\n\
@@ -126,7 +128,7 @@ popover > contents {{\n  background-color: {bg};\n  color: {text};\n  border: 1p
 .panel-back:hover {{\n  background: none;\n  color: {accent};\n}}\n\n\
 .tags-heading {{\n  color: {focus};\n  font-size: {small}px;\n  font-weight: bold;\n}}\n\n\
 .tag-row {{\n  padding: 1px 4px;\n}}\n\n\
-.search-heading {{\n  margin-top: 10px;\n  padding: 0 2px 2px 2px;\n  border-bottom: 1px solid alpha({focus}, 0.3);\n}}\n\n\
+.search-heading {{\n  margin-top: 18px;\n  padding: 0 2px 3px 2px;\n  border-bottom: 1px solid alpha({focus}, 0.3);\n}}\n\n\
 .search-results > row:first-child .search-heading {{\n  margin-top: 0;\n}}\n\n\
 .search-name {{\n  font-weight: bold;\n}}\n\n\
 .search-folder {{\n  color: {muted};\n  font-size: {small}px;\n}}\n\n\
@@ -137,10 +139,9 @@ popover > contents {{\n  background-color: {bg};\n  color: {text};\n  border: 1p
 .completion list > row {{\n  border-radius: 0;\n  padding: 1px 6px;\n}}\n\n\
 .completion list > row:hover {{\n  background-color: {overlay};\n}}\n\n\
 .completion list > row:selected {{\n  background-color: {accent};\n  color: {bg};\n}}\n\n\
-.picker {{\n  background-color: {bg};\n  color: {text};\n  border: 1px solid {focus};\n  border-radius: 0;\n  padding: 0;\n}}\n\n\
-.picker-title {{\n  color: {focus};\n  font-family: {ui_font};\n  font-size: {small}px;\n  padding: 2px 6px 0 6px;\n}}\n\n\
-.picker-prompt {{\n  color: {accent};\n  font-family: {ui_font};\n  font-size: {picker_size}px;\n  padding: 0 0 0 6px;\n}}\n\n\
-.picker entry {{\n  font-size: {picker_size}px;\n  border: none;\n  border-bottom: 1px solid alpha({focus}, 0.45);\n  padding: 4px 6px;\n}}\n\n\
+.picker {{\n  background-color: {surface};\n  color: {text};\n  border: 1px solid {focus};\n  border-radius: 0;\n  padding: 0;\n}}\n\n\
+.picker-title {{\n  color: {focus};\n  font-family: {ui_font};\n  font-size: {small}px;\n  padding: 2px 6px 2px 6px;\n  border-bottom: 1px solid alpha({focus}, 0.45);\n}}\n\n\
+.picker entry {{\n  background-color: transparent;\n  font-size: {picker_size}px;\n  border: none;\n  border-bottom: 1px solid alpha({focus}, 0.45);\n  padding: 4px 6px;\n}}\n\n\
 .picker listview {{\n  background-color: transparent;\n  color: {text};\n  margin-top: 0;\n}}\n\n\
 .picker listview > row {{\n  border-radius: 0;\n  padding: 1px 6px;\n}}\n\n\
 .picker listview > row:hover {{\n  background-color: {overlay};\n}}\n\n\
@@ -150,6 +151,7 @@ popover > contents {{\n  background-color: {bg};\n  color: {text};\n  border: 1p
 .picker listview > row:selected .row-cursor {{\n  color: {bg};\n}}\n\n\
 tooltip {{\n  background-color: {bg};\n  color: {text};\n  border: 1px solid {focus};\n  border-radius: 0;\n}}\n",
             bg = c.background,
+            surface = c.surface,
             overlay = c.overlay,
             text = c.text,
             accent = c.accent,

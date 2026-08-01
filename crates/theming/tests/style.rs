@@ -62,12 +62,117 @@ fn the_tui_sheet_draws_its_structure_in_the_focus_color() {
     let focus = theme.chrome.focus.clone();
     let css = theme.to_gtk_css();
     assert!(
-        css.contains(&format!("border-bottom: 1px solid {focus}")),
-        "the headerbar rule should be a focus hairline"
+        css.contains(&format!("border-bottom: 2px solid {focus}")),
+        "the headerbar rule should be a structural focus line"
     );
     assert!(
         css.contains(".sidebar {"),
         "the sidebar block should still be styled"
+    );
+}
+
+#[test]
+fn the_tui_sheet_divides_its_regions_more_heavily_than_it_rules_their_contents() {
+    let theme = tui("event-horizon", Mode::Dark);
+    let focus = theme.chrome.focus.clone();
+    let css = theme.to_gtk_css();
+    for region in [
+        format!("border-bottom: 2px solid {focus};\n  box-shadow: none;\n  padding-left: 0;"),
+        format!(
+            "separator {{\n  background-color: {focus};\n  min-height: 2px;\n  min-width: 2px;"
+        ),
+        format!("paned > separator {{\n  background-color: {focus};"),
+        format!("  padding: 6px 8px 4px 8px;\n  border-bottom: 2px solid {focus};"),
+        format!(".panel-bar {{\n  padding-bottom: 6px;\n  border-bottom: 2px solid {focus};"),
+    ] {
+        assert!(
+            css.contains(&region),
+            "a structural rule lost its weight: {region}"
+        );
+    }
+    for fine in [
+        ".search-heading",
+        ".search-snippet",
+        ".conflict-title",
+        ".conflict-header",
+        ".picker-title",
+    ] {
+        let block = css
+            .split(&format!("\n{fine} {{"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{fine} is styled"));
+        let block = &block[..block.find('}').expect("the block closes")];
+        for line in block.lines().map(str::trim) {
+            let Some(width) = line
+                .strip_prefix("border-bottom:")
+                .or_else(|| line.strip_prefix("border-left:"))
+            else {
+                continue;
+            };
+            assert!(
+                width.trim().starts_with("1px"),
+                "{fine} rules content, so it should stay a hairline: {line}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_tui_picker_lifts_off_the_window_background() {
+    let theme = tui("retro82", Mode::Dark);
+    let surface = theme.chrome.surface.clone();
+    let bg = theme.chrome.background.clone();
+    let css = theme.to_gtk_css();
+    assert_ne!(surface, bg, "the fixture theme should give the two apart");
+    assert!(
+        css.contains(&format!(".picker {{\n  background-color: {surface};")),
+        "the picker panel should sit on the surface color, not the window background"
+    );
+    assert!(
+        !css.contains(&format!(".picker {{\n  background-color: {bg};")),
+        "the picker should not paint itself in the window background"
+    );
+    assert!(
+        css.contains(".picker entry {\n  background-color: transparent;"),
+        "the query entry inherits the general entry background unless it is cleared"
+    );
+    assert!(
+        css.contains(&format!(
+            ".picker-scrim {{\n  background-color: alpha({bg}, 0.78);\n}}"
+        )),
+        "the scrim should be dark enough to lift the panel off the page"
+    );
+}
+
+#[test]
+fn the_tui_picker_title_carries_a_rule() {
+    let theme = tui("retro82", Mode::Dark);
+    let focus = theme.chrome.focus.clone();
+    let css = theme.to_gtk_css();
+    assert!(
+        css.contains(&format!(
+            ".picker-title {{\n  color: {focus};\n  font-family: {font};\n  font-size: {small}px;\n  padding: 2px 6px 2px 6px;\n  border-bottom: 1px solid alpha({focus}, 0.45);\n}}",
+            font = theme.typography.ui_font,
+            small = theme.typography.font_size.saturating_sub(1),
+        )),
+        "the picker title should run a hairline out under itself"
+    );
+}
+
+#[test]
+fn the_tui_search_results_breathe_between_files() {
+    let css = tui("retro82", Mode::Dark).to_gtk_css();
+    assert!(
+        css.contains(".search-heading {\n  margin-top: 18px;"),
+        "each file heading needs air above it"
+    );
+    assert!(
+        css.contains(".search-results > row:first-child .search-heading {\n  margin-top: 0;\n}"),
+        "the first heading must still sit flush under the bar"
+    );
+    assert!(
+        css.contains(".search-snippet {\n  color:"),
+        "the per-match lines stay tight, so their rule is unchanged"
     );
 }
 
@@ -94,11 +199,11 @@ fn the_tui_sheet_dresses_every_widget_class_the_app_uses() {
         ".settings-close", ".keysheet-heading", ".keysheet-keys", ".theme-button",
         ".theme-name", ".conflict", ".conflict-header", ".conflict-title",
         ".conflict-body", ".conflict-actions", ".status-size", ".status-git",
-        ".status-broken", ".backlinks", ".backlinks-header", ".search-results",
+        ".status-broken", ".status-joiner", ".backlinks", ".backlinks-header", ".search-results",
         ".panel-back", ".tags-heading", ".tag-row", ".search-heading",
         ".search-name", ".search-folder", ".search-count", ".search-snippet",
         ".completion", ".picker", ".picker-detail", ".panel-bar", ".picker-title",
-        ".picker-prompt", ".row-cursor",
+        ".row-cursor",
     ] {
         assert!(css.contains(class), "the TUI sheet says nothing about {class}");
     }

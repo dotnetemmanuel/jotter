@@ -18,22 +18,22 @@ headerbar {
   background-color: #05182e;
   background-image: none;
   color: #f6dcac;
-  border-bottom: 1px solid #3f8f8a;
+  border-bottom: 2px solid #3f8f8a;
   box-shadow: none;
   padding-left: 0;
 }
 
 separator {
-  background-color: alpha(#3f8f8a, 0.45);
-  min-height: 1px;
-  min-width: 1px;
+  background-color: #3f8f8a;
+  min-height: 2px;
+  min-width: 2px;
 }
 
 paned > separator {
-  background-color: alpha(#3f8f8a, 0.45);
+  background-color: #3f8f8a;
   background-image: none;
-  min-width: 1px;
-  min-height: 1px;
+  min-width: 2px;
+  min-height: 2px;
 }
 
 .sidebar {
@@ -70,8 +70,8 @@ paned > separator {
   color: #3f8f8a;
   font-size: 14px;
   font-weight: bold;
-  padding: 6px 8px 2px 8px;
-  border-bottom: 1px solid alpha(#3f8f8a, 0.45);
+  padding: 6px 8px 4px 8px;
+  border-bottom: 2px solid #3f8f8a;
 }
 
 .tree-cursor {
@@ -228,7 +228,7 @@ popover > contents {
 }
 
 .picker-scrim {
-  background-color: alpha(#05182e, 0.6);
+  background-color: alpha(#05182e, 0.78);
 }
 .rail {
   background-color: #05182e;
@@ -428,6 +428,13 @@ popover > contents {
   color: #f85525;
 }
 
+.status-joiner {
+  color: alpha(#6d8f8a, 0.6);
+  font-family: Inter, sans-serif;
+  font-size: 14px;
+  padding: 0;
+}
+
 .status-size:hover, .status-git:hover, .status-broken:hover {
   background: none;
   color: #faa968;
@@ -454,7 +461,8 @@ popover > contents {
 }
 
 .panel-bar {
-  border-bottom: 1px solid alpha(#3f8f8a, 0.45);
+  padding-bottom: 6px;
+  border-bottom: 2px solid #3f8f8a;
 }
 
 .search-results {
@@ -519,8 +527,8 @@ popover > contents {
 }
 
 .search-heading {
-  margin-top: 10px;
-  padding: 0 2px 2px 2px;
+  margin-top: 18px;
+  padding: 0 2px 3px 2px;
   border-bottom: 1px solid alpha(#3f8f8a, 0.3);
 }
 
@@ -574,7 +582,7 @@ popover > contents {
 }
 
 .picker {
-  background-color: #05182e;
+  background-color: #0a2138;
   color: #f6dcac;
   border: 1px solid #3f8f8a;
   border-radius: 0;
@@ -585,17 +593,12 @@ popover > contents {
   color: #3f8f8a;
   font-family: Inter, sans-serif;
   font-size: 14px;
-  padding: 2px 6px 0 6px;
-}
-
-.picker-prompt {
-  color: #faa968;
-  font-family: Inter, sans-serif;
-  font-size: 19px;
-  padding: 0 0 0 6px;
+  padding: 2px 6px 2px 6px;
+  border-bottom: 1px solid alpha(#3f8f8a, 0.45);
 }
 
 .picker entry {
+  background-color: transparent;
   font-size: 19px;
   border: none;
   border-bottom: 1px solid alpha(#3f8f8a, 0.45);
