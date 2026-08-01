@@ -75,6 +75,10 @@ const PAGE_TAGS: &str = "tags";
 const PAGE_REPORT: &str = "report";
 const PAGE_GIT: &str = "git";
 
+/// Narrowest the sidebar can be dragged, in pixels: enough for a stub of a name
+/// and the tree's own indentation, and short of a strip too thin to read.
+const SIDEBAR_MIN_WIDTH: i32 = 130;
+
 /// Debounce before a typed query hits the index, in milliseconds.
 const SEARCH_DEBOUNCE_MS: u64 = 120;
 
@@ -180,6 +184,8 @@ struct State {
     /// The font size, shown only while it differs from the theme's own, and
     /// clickable to put it back.
     size: gtk::Button,
+    /// The dots between the right-hand segments, in bar order.
+    status_joiners: [Label; 2],
     /// The active vault session, absent in single-file mode.
     session: RefCell<Option<VaultSession>>,
     /// Persisted global config (recent vaults, last-active note per vault).
@@ -190,8 +196,6 @@ struct State {
     dirty: Cell<bool>,
     /// Path open in single-file mode, absent in vault mode and for the sample.
     single_file: RefCell<Option<PathBuf>>,
-    /// Set while the app selects a tree row itself, so it does not open a note.
-    quiet_selection: Cell<bool>,
     /// Tree row the app wants selected, reapplied after any rebuild.
     wanted_row: RefCell<Option<PathBuf>>,
     /// Style the sidebar tree was last built in, so a repaint only rebuilds it
@@ -413,17 +417,22 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
+    // Never, so a long name is squeezed into an ellipsis rather than pushing the
+    // rows out to their full width behind a horizontal scrollbar.
     let sidebar = ScrolledWindow::builder()
-        .width_request(240)
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
     // The stack carries `.sidebar`, so styling it here would draw a second border.
 
-    let (status_bar, status, broken, git, size) = build_status_bar();
+    let status_bar = build_status_bar();
 
     let (vault_name, tree_page) = build_tree_page(&sidebar);
     let (pages, opened) = build_sidebar(&tree_page, &theme.chrome.accent);
     let sidebar_stack = pages.stack.clone();
+    // The pages are alternatives, not a grid, so the widest of them has no
+    // business holding a floor under the one on screen.
+    sidebar_stack.set_hhomogeneous(false);
+    sidebar_stack.set_size_request(SIDEBAR_MIN_WIDTH, -1);
 
     // Built here because it needs the same late-bound state the sidebar rows use.
     let conflict = build_conflict_view(&opened);
@@ -448,16 +457,16 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         pending: RefCell::new(None),
         sidebar: sidebar.clone(),
         vault_name: vault_name.clone(),
-        status: status.clone(),
-        broken,
-        git: git.clone(),
-        size: size.clone(),
+        status: status_bar.status.clone(),
+        broken: status_bar.broken.clone(),
+        git: status_bar.git.clone(),
+        size: status_bar.size.clone(),
+        status_joiners: status_bar.joiners.clone(),
         session: RefCell::new(None),
         config: RefCell::new(config),
         pending_anchor: RefCell::new(None),
         dirty: Cell::new(false),
         single_file: RefCell::new(None),
-        quiet_selection: Cell::new(false),
         wanted_row: RefCell::new(None),
         tree_style,
         overlay: gtk::Overlay::new(),
@@ -499,6 +508,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     main_area.append(&stack);
     main_area.append(&backlinks.widget());
 
+    // `shrink_start_child(false)` is what makes the width request above a floor:
+    // the handle stops there instead of squeezing the sidebar away to nothing.
     let paned = Paned::builder()
         .orientation(Orientation::Horizontal)
         .start_child(&sidebar_stack)
@@ -508,15 +519,25 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         .position(240)
         .build();
 
-    state.overlay.set_child(Some(&assemble(&rail.widget(), &paned, &status_bar)));
+    state.overlay.set_child(Some(&assemble(&rail.widget(), &paned, &status_bar.bar)));
 
     present_window(app, &state);
     Some(state)
 }
 
+/// The bottom bar and the pieces of it the app writes into.
+struct StatusBar {
+    bar: gtk::Box,
+    status: Label,
+    broken: gtk::Button,
+    git: gtk::Button,
+    size: gtk::Button,
+    joiners: [Label; 2],
+}
+
 /// Builds the bottom bar: the status message, and the broken-link count that
 /// sits at its right until there is nothing broken to report.
-fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button, gtk::Button) {
+fn build_status_bar() -> StatusBar {
     let status = Label::builder()
         .halign(gtk::Align::Start)
         .margin_start(8)
@@ -553,13 +574,31 @@ fn build_status_bar() -> (gtk::Box, Label, gtk::Button, gtk::Button, gtk::Button
     let spacer = gtk::Box::new(Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
 
+    let joiners = [status_joiner(), status_joiner()];
+
     let bar = gtk::Box::new(Orientation::Horizontal, 0);
     bar.append(&status);
     bar.append(&spacer);
     bar.append(&size);
+    bar.append(&joiners[0]);
     bar.append(&git);
+    bar.append(&joiners[1]);
     bar.append(&broken);
-    (bar, status, broken, git, size)
+    StatusBar {
+        bar,
+        status,
+        broken,
+        git,
+        size,
+        joiners,
+    }
+}
+
+/// One dot between two status bar segments, shown only when both sides are.
+fn status_joiner() -> Label {
+    let joiner = Label::builder().label(style::JOINER).visible(false).build();
+    joiner.add_css_class("status-joiner");
+    joiner
 }
 
 /// The theme jotter starts in: whatever the config asks for, with the user's
@@ -1051,9 +1090,14 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
 
     let list_view = ListView::new(Some(selection.clone()), Some(tree_factory(state)));
 
+    // Set when a click already acted on a row, so the activation its second press
+    // raises does not act on it twice.
+    let clicked_row = Rc::new(Cell::new(false));
+
     // Activating a row (Enter or double-click) opens a file, or toggles a folder.
     let activate_state = Rc::clone(state);
     let activate_sel = selection.clone();
+    let activate_guard = Rc::clone(&clicked_row);
     list_view.connect_activate(move |_, position| {
         let Some(row) = activate_sel
             .item(position)
@@ -1061,34 +1105,57 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
         else {
             return;
         };
+        if activate_guard.replace(false) {
+            return;
+        }
         activate_row(&activate_state, &row);
     });
 
-    // Single-selection change also opens a file, so a single click is enough.
+    // Moving the selection is a highlight and nothing more: arrowing through the
+    // tree must not open every note it passes. Click and Enter open.
     let select_state = Rc::clone(state);
     selection.connect_selection_changed(move |sel, _, _| {
-        // A selection the app made itself is a highlight, not a request to open.
-        if select_state.quiet_selection.get() {
-            return;
-        }
         let Some(row) = sel.selected_item().and_downcast::<TreeListRow>() else {
             return;
         };
         if let Some(node) = row.item().and_downcast::<gtk::StringObject>() {
-            let rel = PathBuf::from(node.string().as_str());
             // Remembered so a rebuild puts the highlight back where the user left it.
-            select_state.wanted_row.replace(Some(rel.clone()));
-            if is_file_node(&select_state, &node.string()) {
-                load_note(&select_state, &rel);
-            }
+            let rel = PathBuf::from(node.string().as_str());
+            select_state.wanted_row.replace(Some(rel));
         }
     });
 
+    wire_row_click(state, &list_view, &clicked_row);
     wire_tree_context_menu(state, &list_view);
     wire_tree_drop(state, &list_view);
 
     state.sidebar.set_child(Some(&list_view));
     tree_model
+}
+
+/// One empty tree row: the TUI gutter, the file or folder name, and the note
+/// title shown beside it when it says more than the name does.
+///
+/// Both texts ellipsize at the end rather than the middle: a name is not a path,
+/// so its opening is what tells two rows apart. The gutter never ellipsizes, as
+/// it is the two columns the names align to.
+fn tree_row_line() -> gtk::Box {
+    let line = gtk::Box::new(Orientation::Horizontal, 6);
+    let gutter = Label::builder().halign(gtk::Align::Start).build();
+    gutter.add_css_class("tree-cursor");
+    let name = Label::builder()
+        .halign(gtk::Align::Start)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
+    let title = Label::builder()
+        .halign(gtk::Align::Start)
+        .ellipsize(gtk::pango::EllipsizeMode::End)
+        .build();
+    title.add_css_class("tree-title");
+    line.append(&gutter);
+    line.append(&name);
+    line.append(&title);
+    line
 }
 
 /// The factory that builds and fills one tree row.
@@ -1104,19 +1171,8 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
         let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
             return;
         };
-        let line = gtk::Box::new(Orientation::Horizontal, 6);
-        let gutter = Label::builder().halign(gtk::Align::Start).build();
-        gutter.add_css_class("tree-cursor");
-        line.append(&gutter);
-        line.append(&Label::builder().halign(gtk::Align::Start).build());
-        let title = Label::builder()
-            .halign(gtk::Align::Start)
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .build();
-        title.add_css_class("tree-title");
-        line.append(&title);
         let expander = TreeExpander::new();
-        expander.set_child(Some(&line));
+        expander.set_child(Some(&tree_row_line()));
         wire_row_drag(&setup_state, &expander);
         item.set_child(Some(&expander));
 
@@ -1161,7 +1217,7 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
 
         // A file jotter cannot open is shown so its folder does not look empty,
         // but dimmed and inert: no selection, no activation, nothing to click.
-        let openable = row.is_expandable() || tree::is_markdown_name(&rel);
+        let openable = is_openable_row(&row);
         item.set_selectable(openable);
         item.set_activatable(openable);
         if openable {
@@ -1362,17 +1418,93 @@ fn dragged_path(target: &gtk::DropTarget) -> Option<String> {
     target.value()?.get::<String>().ok()
 }
 
-/// Opens a file row or expands/collapses a folder row on activation.
+/// Makes a single primary click act on the row under the pointer: a folder
+/// expands or collapses, a note opens.
+///
+/// Acting on release keeps a drag from reading as a click: a drag claims the
+/// sequence, which cancels this gesture. The second press of a double click makes
+/// the row activate, which would act on it again, so it is flagged here and
+/// swallowed there; capture phase, because that activation is raised from the
+/// row's own press handler.
+fn wire_row_click(state: &Rc<State>, list_view: &ListView, clicked: &Rc<Cell<bool>>) {
+    let gesture = gtk::GestureClick::new();
+    gesture.set_button(gdk::BUTTON_PRIMARY);
+    gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+
+    let pressed_view = list_view.clone();
+    let pressed_flag = Rc::clone(clicked);
+    gesture.connect_pressed(move |_, presses, x, y| {
+        // Written on every press, so a flag no activation came for cannot outlive
+        // its click and swallow a later Enter.
+        pressed_flag.set(presses == 2 && actionable_at(&pressed_view, x, y).is_some());
+    });
+
+    let released_view = list_view.clone();
+    let released_state = Rc::clone(state);
+    gesture.connect_released(move |_, presses, x, y| {
+        if presses != 1 {
+            return;
+        }
+        if let Some(row) = actionable_at(&released_view, x, y) {
+            activate_row(&released_state, &row);
+        }
+    });
+    list_view.add_controller(gesture);
+}
+
+/// The row a click at list-local (`x`, `y`) should act on: `None` over empty
+/// space, over a file jotter cannot open, or over the expander chevron, which
+/// already toggles the row itself.
+fn actionable_at(list_view: &ListView, x: f64, y: f64) -> Option<TreeListRow> {
+    let list_widget: &gtk::Widget = list_view.upcast_ref();
+    let mut widget = list_view.pick(x, y, gtk::PickFlags::DEFAULT)?;
+    loop {
+        if widget.css_name() == "expander" {
+            return None;
+        }
+        if let Some(expander) = widget.downcast_ref::<TreeExpander>() {
+            return expander.list_row().filter(is_openable_row);
+        }
+        if &widget == list_widget {
+            return None;
+        }
+        widget = widget.parent()?;
+    }
+}
+
+/// Whether a tree row is one jotter acts on: a folder, or a note it can open.
+fn is_openable_row(row: &TreeListRow) -> bool {
+    row.is_expandable()
+        || row
+            .item()
+            .and_downcast::<gtk::StringObject>()
+            .is_some_and(|node| tree::is_markdown_name(&node.string()))
+}
+
+/// Opens a file row or expands/collapses a folder row.
 fn activate_row(state: &Rc<State>, row: &TreeListRow) {
     let Some(node) = row.item().and_downcast::<gtk::StringObject>() else {
         return;
     };
     let rel = node.string();
-    if is_file_node(state, &rel) {
-        load_note(state, &PathBuf::from(rel.as_str()));
-    } else {
+    if !is_file_node(state, &rel) {
         row.set_expanded(!row.is_expanded());
+        return;
     }
+    let rel = PathBuf::from(rel.as_str());
+    // Reopening the note already showing would only throw the caret back to the top.
+    if !is_current_note(state, &rel) {
+        load_note(state, &rel);
+    }
+}
+
+/// True if `rel` is the note the editor is already showing.
+fn is_current_note(state: &Rc<State>, rel: &Path) -> bool {
+    state
+        .session
+        .borrow()
+        .as_ref()
+        .is_some_and(|session| session.current.borrow().as_deref() == Some(rel))
 }
 
 /// True if the vault-relative `rel` names an existing file (not a folder).
@@ -1713,12 +1845,26 @@ fn open_git_row(state: &Rc<State>, path: &str, line: i32) {
     open_search_hit(state, path, line);
 }
 
+/// Puts the dots back between whichever status segments are on screen.
+fn refresh_status_joiners(state: &Rc<State>) {
+    let shown = [
+        state.size.get_visible(),
+        state.git.get_visible(),
+        state.broken.get_visible(),
+    ];
+    let wanted = style::joiners(state.theme.borrow().style, &shown);
+    for (joiner, on) in state.status_joiners.iter().zip(wanted) {
+        joiner.set_visible(on);
+    }
+}
+
 /// Applies a status that arrived from the worker.
 fn show_git_status(state: &Rc<State>, status: jotter_git::Status) {
     let style = state.theme.borrow().style;
     state.git.set_label(&style::segment(style, &git_status::label(&status)));
     state.git.set_tooltip_text(Some(&git_status::tooltip(&status)));
     state.git.set_visible(true);
+    refresh_status_joiners(state);
     let showing = state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT);
     state.git_last.replace(Some(status));
     if showing {
@@ -1871,14 +2017,12 @@ fn select_in_tree_now(state: &Rc<State>, rel: &Path) {
             && let Some(node) = row.item().and_downcast::<gtk::StringObject>()
             && node.string().as_str() == want
         {
-            state.quiet_selection.set(true);
             selection.set_selected(i);
             list_view.scroll_to(
                 i,
                 gtk::ListScrollFlags::FOCUS | gtk::ListScrollFlags::SELECT,
                 None,
             );
-            state.quiet_selection.set(false);
             break;
         }
     }
@@ -2013,23 +2157,24 @@ fn wire_font_size(app: &Application, state: &Rc<State>) {
 /// Shows the size in the status bar while it differs from the theme's own, so
 /// there is always a way back from a stray Ctrl+scroll.
 fn refresh_size_indicator(state: &Rc<State>) {
-    let chosen = state.config.borrow().appearance.font_size;
-    let Some(chosen) = chosen else {
-        state.size.set_visible(false);
-        return;
-    };
+    let chosen = stray_font_size(state);
+    if let Some(size) = chosen {
+        let style = state.theme.borrow().style;
+        state.size.set_label(&style::segment(style, &format!("{size}px \u{21ba}")));
+    }
+    state.size.set_visible(chosen.is_some());
+    refresh_status_joiners(state);
+}
+
+/// The configured font size while it differs from the theme's own.
+fn stray_font_size(state: &Rc<State>) -> Option<u32> {
+    let chosen = state.config.borrow().appearance.font_size?;
     let theme_size = state
         .theme_file
         .borrow()
         .resolve(state.theme.borrow().mode)
         .map(|bare| bare.typography.font_size);
-    if theme_size.is_ok_and(|size| size == chosen) {
-        state.size.set_visible(false);
-        return;
-    }
-    let style = state.theme.borrow().style;
-    state.size.set_label(&style::segment(style, &format!("{chosen}px \u{21ba}")));
-    state.size.set_visible(true);
+    (!theme_size.is_ok_and(|size| size == chosen)).then_some(chosen)
 }
 
 /// Puts the font size back to whatever the theme asks for.
@@ -2221,11 +2366,13 @@ fn broken_targets(state: &Rc<State>) -> Option<Vec<(String, i64)>> {
 fn refresh_broken(state: &Rc<State>) {
     let Some(missing) = broken_targets(state) else {
         state.broken.set_visible(false);
+        refresh_status_joiners(state);
         return;
     };
     let style = state.theme.borrow().style;
-    state.broken.set_label(&style::segment(style, &broken_label(missing.len())));
+    state.broken.set_label(&style::segment(style, &style::broken_links(style, missing.len())));
     state.broken.set_visible(!missing.is_empty());
+    refresh_status_joiners(state);
 
     if state.sidebar_stack.visible_child_name().as_deref() != Some(PAGE_REPORT) {
         return;
@@ -2238,14 +2385,6 @@ fn refresh_broken(state: &Rc<State>) {
             show_broken_linkers(state, &target);
         }
         _ => state.report_panel.show_top(&missing),
-    }
-}
-
-/// The status-bar text for `count` missing targets.
-fn broken_label(count: usize) -> String {
-    match count {
-        1 => "1 broken link".to_string(),
-        many => format!("{many} broken links"),
     }
 }
 
@@ -2889,6 +3028,12 @@ fn wire_completion(state: &Rc<State>) {
     state
         .editor
         .connect_caret_moved(move || refresh_completion(&moved));
+
+    let clicked = Rc::clone(state);
+    state.completion.connect_activated(move || {
+        accept_completion(&clicked);
+        clicked.editor.grab_focus();
+    });
 
     let keys = Rc::clone(state);
     state.editor.connect_key_capture(move |key| {
@@ -4584,23 +4729,13 @@ fn prompt<F: Fn(String) + 'static>(state: &Rc<State>, title: &str, default: &str
 
 #[cfg(test)]
 mod tests {
-    use super::{broken_label, delete_question, indexed_text};
-
-    #[test]
-    fn one_broken_link_reads_singular() {
-        assert_eq!(broken_label(1), "1 broken link");
-    }
+    use super::{delete_question, indexed_text};
 
     #[test]
     fn a_single_note_is_not_plural() {
         assert_eq!(indexed_text(1), "Indexed 1 note");
         assert_eq!(indexed_text(0), "Indexed 0 notes");
         assert_eq!(indexed_text(42), "Indexed 42 notes");
-    }
-
-    #[test]
-    fn broken_links_are_counted() {
-        assert_eq!(broken_label(4), "4 broken links");
     }
 
     #[test]
