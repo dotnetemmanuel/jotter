@@ -80,6 +80,7 @@ where
 
     let (panel, entry, selection, list_view) =
         build_panel(style, title, placeholder, initial_query, &rows);
+    fit_to_window(&panel, overlay);
 
     // Covers the window so a click anywhere outside the panel dismisses it.
     let scrim = gtk::Box::new(Orientation::Vertical, 0);
@@ -203,7 +204,6 @@ where
     panel.set_halign(Align::Center);
     panel.set_valign(Align::Start);
     panel.set_margin_top(56);
-    panel.set_size_request(560, -1);
 
     if style == Style::Tui {
         let heading = gtk::Label::builder()
@@ -213,20 +213,13 @@ where
         heading.add_css_class("picker-title");
         panel.append(&heading);
 
-        let line = gtk::Box::new(Orientation::Horizontal, 0);
-        let prompt = gtk::Label::new(Some(">"));
-        prompt.add_css_class("picker-prompt");
-        // A typed leading > is its own prompt; the chrome supplies one otherwise.
-        prompt.set_visible(!initial_query.starts_with('>'));
-        line.append(&prompt);
+        // No chrome prompt: a > belongs to the command palette, which supplies
+        // its own as typed text.
         entry.set_hexpand(true);
-        line.append(&entry);
-        panel.append(&line);
+        panel.append(&entry);
 
         entry.connect_changed(move |entry| {
-            let text = entry.text();
-            heading.set_text(&crate::style::heading(style, &title(&text)));
-            prompt.set_visible(!text.starts_with('>'));
+            heading.set_text(&crate::style::heading(style, &title(&entry.text())));
         });
     } else {
         panel.append(&entry);
@@ -235,6 +228,42 @@ where
 
     (panel, entry, selection, list_view)
 }
+
+/// Widest the panel may get, so a large window does not get a banner of a picker.
+const PANEL_MAX_WIDTH: i32 = 640;
+/// Narrowest it may get before it stops being worth opening.
+const PANEL_MIN_WIDTH: i32 = 320;
+/// Kept clear on each side, so the panel never touches the window frame.
+const PANEL_GUTTER: i32 = 32;
+
+/// Ties the panel width to the window, on open and again when it is first shown.
+fn fit_to_window(panel: &gtk::Box, overlay: &gtk::Overlay) {
+    panel.set_size_request(panel_width(overlay.width()), -1);
+    panel.connect_map({
+        let overlay = overlay.clone();
+        move |panel| panel.set_size_request(panel_width(overlay.width()), -1)
+    });
+}
+
+/// Panel width for a window `window` pixels across: a share of it, held between
+/// bounds, and never wider than the window minus its gutters.
+fn panel_width(window: i32) -> i32 {
+    if window <= 0 {
+        return PANEL_MAX_WIDTH;
+    }
+    let room = window - 2 * PANEL_GUTTER;
+    (window * 3 / 5)
+        .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+        .min(room)
+        .max(1)
+}
+
+/// Widest the path grows before it ellipsizes, chosen to stay inside the panel
+/// even in the monospace of the TUI style, so no row can widen the panel.
+const LABEL_CHARS: i32 = 40;
+/// The same for the dimmed detail after it.
+const DETAIL_CHARS: i32 = 24;
+
 /// Builds the row factory, reading each row out of `rows` on bind.
 fn row_factory(style: Style, rows: &Rc<RefCell<Vec<Row>>>) -> SignalListItemFactory {
     let factory = SignalListItemFactory::new();
@@ -244,8 +273,19 @@ fn row_factory(style: Style, rows: &Rc<RefCell<Vec<Row>>>) -> SignalListItemFact
         cursor.add_css_class("row-cursor");
         cursor.set_visible(style == Style::Tui);
         line.append(&cursor);
-        let label = gtk::Label::builder().xalign(0.0).use_markup(true).build();
-        let detail = gtk::Label::builder().xalign(0.0).build();
+        // Ellipsized so a long path truncates instead of setting the panel width.
+        let label = gtk::Label::builder()
+            .xalign(0.0)
+            .use_markup(true)
+            .ellipsize(gtk::pango::EllipsizeMode::Middle)
+            .max_width_chars(LABEL_CHARS)
+            .hexpand(true)
+            .build();
+        let detail = gtk::Label::builder()
+            .xalign(0.0)
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .max_width_chars(DETAIL_CHARS)
+            .build();
         detail.add_css_class("picker-detail");
         line.append(&label);
         line.append(&detail);
@@ -387,7 +427,41 @@ fn close_tag(color: Option<&str>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{highlight, highlight_colored};
+    use super::{
+        PANEL_GUTTER, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, highlight, highlight_colored, panel_width,
+    };
+
+    #[test]
+    fn a_wide_window_caps_the_panel() {
+        assert_eq!(panel_width(1280), PANEL_MAX_WIDTH);
+        assert_eq!(panel_width(3840), PANEL_MAX_WIDTH);
+    }
+
+    #[test]
+    fn a_middling_window_gets_a_share_of_itself() {
+        assert_eq!(panel_width(900), 540);
+    }
+
+    #[test]
+    fn a_small_window_stops_at_the_floor() {
+        assert_eq!(panel_width(500), PANEL_MIN_WIDTH);
+    }
+
+    #[test]
+    fn a_window_narrower_than_the_floor_still_leaves_its_gutters() {
+        assert_eq!(panel_width(360), 360 - 2 * PANEL_GUTTER);
+        assert!(panel_width(300) < 300);
+    }
+
+    #[test]
+    fn a_window_of_no_width_yet_falls_back_to_the_cap() {
+        assert_eq!(panel_width(0), PANEL_MAX_WIDTH);
+    }
+
+    #[test]
+    fn an_absurd_window_still_asks_for_a_positive_width() {
+        assert!(panel_width(20) > 0);
+    }
 
     #[test]
     fn a_colored_highlight_carries_the_color_and_the_bold() {
