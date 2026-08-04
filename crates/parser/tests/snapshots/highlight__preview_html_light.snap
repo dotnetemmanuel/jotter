@@ -1,0 +1,27 @@
+---
+source: crates/parser/tests/highlight.rs
+expression: html
+---
+<h1><a href="#highlighting" aria-hidden="true" class="anchor" id="highlighting"></a>Highlighting</h1>
+<pre style="background-color:#ffffff;"><code class="language-rust"><span style="color:#6a737d;">// a comment
+</span><span style="color:#22863a;">fn </span><span style="color:#6f42c1;">main</span><span style="color:#24292e;">() {
+</span><span style="color:#24292e;">    </span><span style="color:#22863a;">let</span><span style="color:#24292e;"> greeting = </span><span style="color:#032f62;">&quot;hello&quot;</span><span style="color:#24292e;">;
+</span><span style="color:#24292e;">    println!(</span><span style="color:#032f62;">&quot;{greeting} {}&quot;</span><span style="color:#24292e;">, </span><span style="color:#005cc5;">42</span><span style="color:#24292e;">);
+</span><span style="color:#24292e;">}
+</span></code></pre>
+<pre style="background-color:#ffffff;"><code class="language-python"><span style="color:#6a737d;"># a comment
+</span><span style="color:#22863a;">def </span><span style="color:#6f42c1;">greet</span><span style="color:#24292e;">(</span><span style="color:#e36209;">name</span><span style="color:#24292e;">):
+</span><span style="color:#24292e;">    </span><span style="color:#d73a49;">return </span><span style="color:#22863a;">f</span><span style="color:#032f62;">&quot;hi </span><span style="color:#24292e;">{name}</span><span style="color:#032f62;">&quot;
+</span></code></pre>
+<pre style="background-color:#ffffff;"><code class="language-csharp"><span style="color:#d73a49;">public async </span><span style="color:#22863a;">Task</span><span style="color:#24292e;">&lt;</span><span style="color:#22863a;">int</span><span style="color:#24292e;">&gt; </span><span style="color:#6f42c1;">GoAsync</span><span style="color:#24292e;">() {
+</span><span style="color:#24292e;">    </span><span style="color:#22863a;">var </span><span style="color:#e36209;">x </span><span style="color:#24292e;">= </span><span style="color:#005cc5;">1 </span><span style="color:#24292e;">+ </span><span style="color:#005cc5;">2</span><span style="color:#24292e;">;
+</span><span style="color:#24292e;">    </span><span style="color:#d73a49;">return await </span><span style="color:#e36209;">Task</span><span style="color:#24292e;">.</span><span style="color:#6f42c1;">FromResult</span><span style="color:#24292e;">(</span><span style="color:#e36209;">x</span><span style="color:#24292e;">);
+</span><span style="color:#24292e;">}
+</span></code></pre>
+<pre style="background-color:#ffffff;"><code class="language-kotlin"><span style="color:#6a737d;">// a comment
+</span><span style="color:#d73a49;">fun </span><span style="color:#6f42c1;">greet</span><span style="color:#24292e;">(</span><span style="color:#e36209;">name</span><span style="color:#24292e;">: </span><span style="color:#22863a;">String</span><span style="color:#24292e;">) = </span><span style="color:#032f62;">&quot;hi </span><span style="color:#e36209;">$name</span><span style="color:#032f62;">&quot;
+</span></code></pre>
+<pre style="background-color:#ffffff;"><code class="language-nosuchlang">this stays flat
+</code></pre>
+<pre style="background-color:#ffffff;"><code>no language at all
+</code></pre>

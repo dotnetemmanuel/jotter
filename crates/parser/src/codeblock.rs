@@ -10,11 +10,17 @@
 //! unclosed fence, which is what a block looks like the whole time it is being
 //! typed, still gets its colors.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
-use syntect::easy::HighlightLines;
-use syntect::parsing::{SyntaxSet, syntax_definition::SyntaxDefinition};
+use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, Style, Theme};
+use syntect::parsing::{
+    ParseState, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet,
+    syntax_definition::SyntaxDefinition,
+};
 
 use jotter_theming::Code;
 
@@ -58,6 +64,143 @@ pub(crate) fn lookup(token: &str) -> Option<&'static syntect::parsing::SyntaxRef
     syntaxes().find_syntax_by_token(token)
 }
 
+/// The scope changes syntect found on one line, or `None` if it failed to parse.
+type LineOps = Option<Vec<(usize, ScopeStackOp)>>;
+
+/// A block is the syntax it is read with plus the exact text it holds.
+type BlockKey = (usize, String);
+
+/// One block's scopes, how many there are, and when they were last wanted.
+struct Entry {
+    used: u64,
+    weight: usize,
+    ops: Rc<Vec<LineOps>>,
+}
+
+/// Most of the cost of highlighting is finding the scopes, and those depend only
+/// on the text; only the last step, scope to color, depends on the palette. So
+/// the scopes are kept and a theme switch pays for the coloring alone. The
+/// editor and the preview highlight the same blocks and share these entries.
+struct Tokenized {
+    blocks: HashMap<BlockKey, Entry>,
+    weight: usize,
+    clock: u64,
+}
+
+/// Scopes held before the least recently used blocks are dropped.
+#[cfg(not(test))]
+const CACHE_OPS: usize = 250_000;
+/// Small enough for a test to fill it in a moment.
+#[cfg(test)]
+const CACHE_OPS: usize = 2_000;
+
+thread_local! {
+    static TOKENIZED: RefCell<Tokenized> =
+        RefCell::new(Tokenized { blocks: HashMap::new(), weight: 0, clock: 0 });
+}
+
+/// Position in the shared set, which identifies a syntax where its name may not.
+fn syntax_id(syntax: &SyntaxReference) -> Option<usize> {
+    syntaxes().syntaxes().iter().position(|known| std::ptr::eq(known, syntax))
+}
+
+/// Run syntect's parser over `code`, one entry per line.
+fn parse(syntax: &SyntaxReference, code: &str) -> Vec<LineOps> {
+    count_tokenization();
+    let mut state = ParseState::new(syntax);
+    code.split_inclusive('\n')
+        .map(|line| state.parse_line(line, syntaxes()).ok())
+        .collect()
+}
+
+/// The scopes of `code` under `syntax`, parsed once and kept for later palettes.
+fn tokenize(syntax: &SyntaxReference, code: &str) -> Rc<Vec<LineOps>> {
+    let Some(id) = syntax_id(syntax) else {
+        return Rc::new(parse(syntax, code));
+    };
+    let key = (id, code.to_string());
+
+    TOKENIZED.with_borrow_mut(|cache| {
+        cache.clock += 1;
+        let used = cache.clock;
+        if let Some(entry) = cache.blocks.get_mut(&key) {
+            entry.used = used;
+            return Rc::clone(&entry.ops);
+        }
+        let ops = Rc::new(parse(syntax, code));
+        let weight = ops.iter().flatten().map(Vec::len).sum::<usize>();
+        cache.blocks.insert(key, Entry { used, weight, ops: Rc::clone(&ops) });
+        cache.weight += weight;
+        while cache.weight > CACHE_OPS {
+            let Some(oldest) = cache
+                .blocks
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(dropped) = cache.blocks.remove(&oldest) {
+                cache.weight -= dropped.weight;
+            }
+        }
+        ops
+    })
+}
+
+/// One code block's scopes, ready to be colored by whichever palette asks.
+///
+/// Stands in for `syntect::easy::HighlightLines`, which fuses parsing and
+/// coloring and so cannot reuse the parse across palettes.
+pub(crate) struct BlockHighlighter<'a> {
+    highlighter: Highlighter<'a>,
+    state: HighlightState,
+    ops: Rc<Vec<LineOps>>,
+    line: usize,
+}
+
+impl<'a> BlockHighlighter<'a> {
+    pub(crate) fn new(syntax: &SyntaxReference, theme: &'a Theme, code: &str) -> Self {
+        let highlighter = Highlighter::new(theme);
+        let state = HighlightState::new(&highlighter, ScopeStack::new());
+        Self { highlighter, state, ops: tokenize(syntax, code), line: 0 }
+    }
+
+    /// The colored runs of the next line, or `None` if it did not parse.
+    ///
+    /// Lines must arrive in the order they were given to [`Self::new`].
+    pub(crate) fn highlight_line<'t>(&mut self, text: &'t str) -> Option<Vec<(Style, &'t str)>> {
+        let line = self.line;
+        self.line += 1;
+        let ops = self.ops.get(line)?.as_ref()?;
+        Some(HighlightIterator::new(&mut self.state, ops, text, &self.highlighter).collect())
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TOKENIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn count_tokenization() {
+    TOKENIZATIONS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(not(test))]
+fn count_tokenization() {}
+
+/// How many blocks this thread has parsed, for the tests that guard the cache.
+#[cfg(test)]
+pub(crate) fn tokenizations() -> usize {
+    TOKENIZATIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn cached_ops() -> usize {
+    TOKENIZED.with_borrow(|cache| cache.weight)
+}
+
 /// Color spans for every fenced code block in `src`, in document order.
 ///
 /// Text in the palette's default foreground is not reported: the editor already
@@ -73,11 +216,12 @@ pub fn color_spans(src: &str, code: &Code) -> Vec<ColorSpan> {
         let Some(syntax) = lookup(&block.language) else {
             continue;
         };
-        let mut lines = HighlightLines::new(syntax, &theme);
+        let content = &src[block.content.clone()];
+        let mut lines = BlockHighlighter::new(syntax, &theme, content);
         let mut cursor = block.content.start;
         // Line by line, as syntect wants, with offsets kept against the source.
-        for line in src[block.content.clone()].split_inclusive('\n') {
-            let Ok(styled) = lines.highlight_line(line, syntaxes()) else {
+        for line in content.split_inclusive('\n') {
+            let Some(styled) = lines.highlight_line(line) else {
                 cursor += line.len();
                 continue;
             };
@@ -189,7 +333,7 @@ fn hex_of(color: syntect::highlighting::Color) -> String {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::{ColorSpan, color_spans, fenced_blocks};
+    use super::{ColorSpan, color_spans, fenced_blocks, tokenizations};
     use jotter_theming::Code;
 
     pub(super) fn palette() -> Code {
@@ -295,6 +439,82 @@ pub(super) mod tests {
         let blocks = fenced_blocks("```rust\ncode\n~~~\nmore\n```\n");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].language, "rust");
+    }
+
+    /// A second palette differs in every color, so a stale reuse shows up.
+    fn other_palette() -> Code {
+        Code {
+            background: "#ffffff".into(),
+            foreground: "#111111".into(),
+            keyword: "#aa0000".into(),
+            string: "#00aa00".into(),
+            comment: "#333333".into(),
+            function: "#0000aa".into(),
+            number: "#aaaa00".into(),
+            type_name: "#aa00aa".into(),
+            variable: "#111111".into(),
+        }
+    }
+
+    /// Same text, same colors, but resolved from the palette it was given.
+    fn recolored(src: &str) -> (Vec<ColorSpan>, Vec<ColorSpan>) {
+        (color_spans(src, &palette()), color_spans(src, &other_palette()))
+    }
+
+    #[test]
+    fn a_second_palette_recolors_rather_than_reusing_the_first() {
+        let src = "```rust\n// note\nlet x = 42;\n```\n";
+        let (first, second) = recolored(src);
+        assert!(second.iter().any(|span| span.color == "#333333"), "{second:?}");
+        assert!(second.iter().all(|span| span.color != "#888888"), "{second:?}");
+        let ranges: Vec<_> = first.iter().map(|span| span.range.clone()).collect();
+        let same: Vec<_> = second.iter().map(|span| span.range.clone()).collect();
+        assert_eq!(ranges, same);
+        assert_eq!(color_spans(src, &palette()), first);
+    }
+
+    #[test]
+    fn a_block_is_tokenized_once_however_many_palettes_color_it() {
+        let src = "```rust\n// note\nlet x = 42;\n```\n";
+        drop(color_spans(src, &palette()));
+        let after_first = tokenizations();
+        drop(color_spans(src, &other_palette()));
+        drop(color_spans(src, &palette()));
+        assert_eq!(tokenizations(), after_first);
+    }
+
+    #[test]
+    fn the_editor_and_the_preview_share_one_tokenization() {
+        let src = "```rust\n// note\nlet x = 42;\n```\n";
+        drop(color_spans(src, &palette()));
+        let after_editor = tokenizations();
+        let no_links = |_: &str| None;
+        drop(crate::render(src, &other_palette(), &no_links, &crate::NoImages));
+        assert_eq!(tokenizations(), after_editor);
+    }
+
+    #[test]
+    fn the_same_text_in_two_languages_is_tokenized_apart() {
+        let sql = color_spans("```sql\nselect 1\n```\n", &palette());
+        let python = color_spans("```python\nselect 1\n```\n", &palette());
+        assert_ne!(sql, python);
+    }
+
+    #[test]
+    fn the_cache_drops_the_oldest_block_rather_than_growing() {
+        let block = |n: usize| {
+            format!("```rust\nlet value_{n} = first(1) + second(2) * third(3);\n```\n")
+        };
+        for n in 0..200 {
+            drop(color_spans(&block(n), &palette()));
+            assert!(super::cached_ops() <= super::CACHE_OPS, "{} ops held", super::cached_ops());
+        }
+
+        let before = tokenizations();
+        drop(color_spans(&block(199), &palette()));
+        assert_eq!(tokenizations(), before, "the newest block was dropped");
+        drop(color_spans(&block(0), &palette()));
+        assert_eq!(tokenizations(), before + 1, "the oldest block was kept");
     }
 }
 

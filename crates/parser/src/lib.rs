@@ -310,9 +310,9 @@ impl comrak::adapters::SyntaxHighlighterAdapter for CodeAdapter {
             return write!(output, "{}", escape_html(code));
         };
 
-        let mut lines = syntect::easy::HighlightLines::new(syntax, &self.theme);
+        let mut lines = codeblock::BlockHighlighter::new(syntax, &self.theme, code);
         for line in code.split_inclusive('\n') {
-            let Ok(styled) = lines.highlight_line(line, codeblock::syntaxes()) else {
+            let Some(styled) = lines.highlight_line(line) else {
                 write!(output, "{}", escape_html(line))?;
                 continue;
             };
