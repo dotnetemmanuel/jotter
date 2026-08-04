@@ -163,6 +163,25 @@ impl Preview {
         }
     }
 
+    /// Move the reader to `anchor` (or the top without one) in the page already
+    /// loaded, with no re-render and no reload.
+    ///
+    /// What a toggle into an unchanged preview does instead of reloading.
+    pub fn scroll_to(&self, anchor: Option<&str>) {
+        // A load already in flight would scroll after us, so hand it the anchor.
+        if self.view.is_loading() {
+            *self.pending_anchor.borrow_mut() = anchor.map(str::to_owned);
+            return;
+        }
+        self.view.evaluate_javascript(
+            &scroll_js(anchor),
+            None,
+            None,
+            None::<&gtk::gio::Cancellable>,
+            |_| {},
+        );
+    }
+
     /// Re-render in place preserving the current scroll position, used on a theme
     /// switch. Overwriting the current file and reloading past the cache keeps the
     /// scroll offset (a reload ignores the url fragment), unlike loading a fresh
@@ -266,6 +285,12 @@ fn scroll_to_anchor_js(anchor: &str) -> String {
     )
 }
 
+/// Host script that puts the reader at `anchor`, or at the top when the caret
+/// sits above every heading, matching where a fresh load would have landed.
+fn scroll_js(anchor: Option<&str>) -> String {
+    anchor.map_or_else(|| "window.scrollTo(0,0);".to_owned(), scroll_to_anchor_js)
+}
+
 /// Encode `s` as a double-quoted JavaScript string literal, escaping the few
 /// characters that could otherwise break out of the literal (a heading slug is
 /// unlikely to contain them, but the injection must be safe regardless).
@@ -322,6 +347,12 @@ mod tests {
         let js = scroll_to_anchor_js("my-heading");
         assert!(js.contains("getElementById(\"my-heading\")"));
         assert!(js.contains("scrollIntoView(true)"));
+    }
+
+    #[test]
+    fn scroll_script_without_an_anchor_goes_to_the_top() {
+        assert_eq!(super::scroll_js(None), "window.scrollTo(0,0);");
+        assert_eq!(super::scroll_js(Some("h")), scroll_to_anchor_js("h"));
     }
 
     #[test]

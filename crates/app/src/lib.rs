@@ -19,6 +19,7 @@ mod keysheet;
 mod links;
 mod moves;
 mod picker;
+mod preview_cache;
 mod rail;
 mod results;
 mod search;
@@ -242,6 +243,11 @@ struct State {
     git_last: RefCell<Option<jotter_git::Status>>,
     /// Bumped per explicit message, so only the newest one clears itself.
     status_message: Cell<u64>,
+    /// What the preview web view currently holds, so a toggle into a preview
+    /// nothing has changed can scroll instead of re-rendering and reloading.
+    loaded_preview: RefCell<Option<preview_cache::LoadedPage>>,
+    /// Bumped by anything that makes the same text render differently.
+    render_generation: Cell<u64>,
 }
 
 /// Build the application, wire the theme and UI, and run the GTK loop.
@@ -489,6 +495,8 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         git_generation: Cell::new(0),
         git_last: RefCell::new(None),
         status_message: Cell::new(0),
+        loaded_preview: RefCell::new(None),
+        render_generation: Cell::new(0),
     });
     opened.replace(Some(Rc::clone(&state)));
 
@@ -730,6 +738,8 @@ fn open_single_file(state: &Rc<State>, path: Option<&Path>) {
     // Single-file mode has an empty, non-interactive sidebar, and coming here from
     // a vault has to leave the tree and the session behind rather than stale rows.
     state.session.replace(None);
+    // No vault: every wikilink is broken now, and images resolve from elsewhere.
+    invalidate_preview(state);
     state.sidebar.set_child(None::<&gtk::Widget>);
     state.status.set_text("no vault open");
     state.vault_name.set_visible(false);
@@ -992,21 +1002,24 @@ fn load_note(state: &Rc<State>, rel: &Path) {
         }
     };
 
-    state.editor.set_initial_text(&text);
-    *state.cached_caret.borrow_mut() = 0;
-    state.dirty.set(false);
-    refresh_editor_links(state);
-    // If preview is showing, re-render so the switch does not show a stale page.
-    if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
-        render_into_preview(state);
-    }
-
+    // Ahead of any render: relative image paths resolve against the current note.
     if let Some(session) = state.session.borrow().as_ref() {
         session.current.replace(Some(rel.to_path_buf()));
         let root = session.vault.root().to_path_buf();
         let mut config = state.config.borrow_mut();
         config.set_last_active(&root, rel);
         config.push_recent_note(&root, rel);
+    }
+
+    state.editor.set_initial_text(&text);
+    *state.cached_caret.borrow_mut() = 0;
+    state.dirty.set(false);
+    // Two notes with identical text differ: images resolve against their folder.
+    invalidate_preview(state);
+    refresh_editor_links(state);
+    // If preview is showing, re-render so the switch does not show a stale page.
+    if state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+        render_into_preview(state);
     }
     // Opening a note is the routine moment to write layout too, so a crash or a
     // kill does not cost more than the folders opened since the last note switch.
@@ -1616,6 +1629,8 @@ fn refresh_code_colors(state: &Rc<State>, text: &str) {
 /// Runs on every structural change, so a note that appears or disappears flips
 /// the links pointing at it without a full reindex.
 fn refresh_links(state: &Rc<State>) {
+    // A link flipping between broken and live renders the same text differently.
+    invalidate_preview(state);
     {
         let session = state.session.borrow();
         let Some(session) = session.as_ref() else {
@@ -2040,11 +2055,11 @@ fn wire_preview_zoom(window: &ApplicationWindow, state: &Rc<State>) {
         // The first render happens before the window is realized, so it used the
         // uncorrected size. Repaint once the real scale is known, or the preview
         // keeps that wrong size until something else redraws it.
-        if scale > 0.0
-            && zoom_state.preview.set_zoom(scale)
-            && zoom_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW)
-        {
-            render_into_preview(&zoom_state);
+        if scale > 0.0 && zoom_state.preview.set_zoom(scale) {
+            invalidate_preview(&zoom_state);
+            if zoom_state.stack.visible_child_name().as_deref() == Some(PAGE_PREVIEW) {
+                render_into_preview(&zoom_state);
+            }
         }
     };
 
@@ -2085,8 +2100,9 @@ fn toggle_mode(state: &Rc<State>) {
     } else {
         // Edit -> preview: cache the caret, render, and scroll to nearest heading.
         *state.cached_caret.borrow_mut() = state.editor.caret_line();
-        render_into_preview(state);
+        // Shown first so a reused page is scrolled while the view is on screen.
         state.stack.set_visible_child_name(PAGE_PREVIEW);
+        render_into_preview(state);
     }
 }
 
@@ -3399,6 +3415,7 @@ fn set_appearance<F: Fn(&mut config::Appearance)>(state: &Rc<State>, change: F) 
 
 /// Repaints every surface for `next` and keeps it as the active theme.
 fn apply_theme(state: &Rc<State>, next: Theme) {
+    invalidate_preview(state);
     apply_chrome_css(&state.chrome_provider, &next);
     stamp_logo(&state.logo, &next.chrome.text);
     state.editor.set_theme(&next);
@@ -3426,6 +3443,7 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
         let text = state.editor.text();
         let rendered = render_markdown(state, &text);
         state.preview.rerender_preserving_scroll(&rendered.html);
+        remember_loaded(state, text, state.render_generation.get(), rendered.headings);
     }
     refresh_editor_links(state);
     restyle(state);
@@ -3530,19 +3548,69 @@ fn note_folder(state: &Rc<State>) -> Option<PathBuf> {
 /// Parse the editor buffer, load it into the preview, and scroll to the heading
 /// nearest the cached caret line.
 ///
+/// A page the web view already holds and that this render would only reproduce
+/// is scrolled instead, since loading a fresh copy of it stalls the window.
+///
 /// An anchor requested by a followed wikilink wins over the caret heading and is
 /// consumed here, so it applies to exactly one render.
 fn render_into_preview(state: &Rc<State>) {
     let text = state.editor.text();
-    let rendered = render_markdown(state, &text);
-
+    let generation = state.render_generation.get();
     let requested = state.pending_anchor.borrow_mut().take();
     // Caret is 0-based, heading source lines are 1-based, so compare in 1-based.
     let caret_1based = *state.cached_caret.borrow() + 1;
-    let anchor = requested
-        .as_deref()
-        .or_else(|| nearest_heading(&rendered.headings, caret_1based));
-    state.preview.render(&rendered.html, anchor);
+
+    let loaded = state.loaded_preview.borrow();
+    if let Some(headings) = preview_cache::reusable(loaded.as_ref(), &text, generation) {
+        let anchor = anchor_for(requested.as_deref(), headings, caret_1based);
+        state.preview.scroll_to(anchor.as_deref());
+        return;
+    }
+    drop(loaded);
+
+    let rendered = render_markdown(state, &text);
+    let anchor = anchor_for(requested.as_deref(), &rendered.headings, caret_1based);
+    state.preview.render(&rendered.html, anchor.as_deref());
+    remember_loaded(state, text, generation, rendered.headings);
+}
+
+/// The anchor a render should land on: what a followed wikilink asked for, else
+/// the heading the caret is nearest.
+fn anchor_for(
+    requested: Option<&str>,
+    headings: &[jotter_parser::HeadingAnchor],
+    caret_1based: i32,
+) -> Option<String> {
+    requested
+        .or_else(|| nearest_heading(headings, caret_1based))
+        .map(str::to_owned)
+}
+
+/// Records what the web view now holds, so the next toggle can reuse it.
+///
+/// Every path that loads a document into the preview must end here, or what is
+/// on screen and what we believe about it drift apart.
+fn remember_loaded(
+    state: &Rc<State>,
+    text: String,
+    generation: u64,
+    headings: Vec<jotter_parser::HeadingAnchor>,
+) {
+    *state.loaded_preview.borrow_mut() = Some(preview_cache::LoadedPage {
+        text,
+        generation,
+        headings,
+    });
+}
+
+/// Declares that the same text would now render differently, so the loaded page
+/// must not be reused.
+///
+/// Called for anything feeding the render other than the text itself: the theme
+/// (CSS and code colors), the preview zoom, wikilink resolution, and the folder
+/// relative image paths are resolved against.
+fn invalidate_preview(state: &Rc<State>) {
+    state.render_generation.set(state.render_generation.get() + 1);
 }
 
 /// Route links clicked in the preview: notes open here, unresolved ones prompt,
@@ -3959,9 +4027,11 @@ fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
     gtk::glib::timeout_add_local(Duration::from_millis(DRAIN_MS), move || {
         let mut structural = false;
         let mut touched_current = false;
+        let mut saw_change = false;
         loop {
             match rx.try_recv() {
                 Ok(change) => {
+                    saw_change = true;
                     if changed_the_open_note(&drain_state, &change) {
                         touched_current = true;
                     }
@@ -3975,6 +4045,10 @@ fn drain_watcher(state: &Rc<State>, rx: Receiver<VaultChange>) {
                     return gtk::glib::ControlFlow::Break;
                 }
             }
+        }
+        if saw_change {
+            // An image arriving or leaving repaints markdown nobody edited.
+            invalidate_preview(&drain_state);
         }
         if structural {
             refresh_tree(&drain_state);
@@ -4327,6 +4401,7 @@ fn close_current_note(state: &Rc<State>) {
     if let Some(session) = state.session.borrow().as_ref() {
         session.current.replace(None);
     }
+    invalidate_preview(state);
     if let Some(rel) = first_note(state) {
         load_note(state, &rel);
         select_in_tree(state, &rel);
