@@ -179,6 +179,44 @@ fn a_subtask_belongs_to_exactly_one_task() {
 }
 
 #[test]
+fn renaming_a_subtask_leaves_its_siblings_untouched() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Launch", None, None, None).unwrap();
+    let one = command::add_subtask(&store, task.id, "Write docs").unwrap();
+    let two = command::add_subtask(&store, task.id, "Cut release").unwrap();
+    command::toggle_subtask(&store, two.id).unwrap();
+
+    command::rename_subtask(&store, one.id, "Write docs and changelog").unwrap();
+
+    let after = query::subtasks_for_task(&store, task.id).unwrap();
+    let one_after = after.iter().find(|s| s.id == one.id).unwrap();
+    let two_after = after.iter().find(|s| s.id == two.id).unwrap();
+    assert_eq!(one_after.title, "Write docs and changelog");
+    assert_eq!(two_after.title, "Cut release");
+    assert!(two_after.done);
+}
+
+#[test]
+fn removing_a_subtask_leaves_its_siblings_and_task_untouched() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Launch", None, None, None).unwrap();
+    let one = command::add_subtask(&store, task.id, "Write docs").unwrap();
+    let two = command::add_subtask(&store, task.id, "Cut release").unwrap();
+    let three = command::add_subtask(&store, task.id, "Announce").unwrap();
+    command::toggle_subtask(&store, three.id).unwrap();
+
+    command::remove_subtask(&store, two.id).unwrap();
+
+    let remaining = query::subtasks_for_task(&store, task.id).unwrap();
+    let remaining_ids: Vec<i64> = remaining.iter().map(|s| s.id).collect();
+    assert_eq!(remaining_ids, vec![one.id, three.id]);
+    let three_after = remaining.iter().find(|s| s.id == three.id).unwrap();
+    assert_eq!(three_after.title, "Announce");
+    assert!(three_after.done);
+    assert!(query::get_task(&store, task.id).unwrap().is_some());
+}
+
+#[test]
 fn deleting_a_task_deletes_its_subtasks() {
     let store = Store::open_in_memory().unwrap();
     let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
