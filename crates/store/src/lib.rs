@@ -15,6 +15,9 @@ use thiserror::Error;
 mod model;
 pub use model::{Project, Subtask, Task, TaskState};
 
+pub mod command;
+pub mod query;
+
 /// Migrations embedded at compile time, applied in numbered order on open.
 ///
 /// Each entry is `(number, sql)`. Adding `002_*.sql` later means appending one line
