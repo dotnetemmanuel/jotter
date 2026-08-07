@@ -1,0 +1,11 @@
+[package]
+name = "jotter-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+thiserror = "2.0.19"
+
+[dev-dependencies]
+tempfile = "3.27.0"

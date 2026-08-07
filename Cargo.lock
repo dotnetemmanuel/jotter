@@ -1084,6 +1084,15 @@ name = "jotter-search"
 version = "0.1.0"
 
 [[package]]
+name = "jotter-store"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "jotter-theming"
 version = "0.1.0"
 dependencies = [
