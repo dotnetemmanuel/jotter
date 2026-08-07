@@ -300,6 +300,25 @@ Two things were cut from this phase after T0 landed:
 Acceptance: full test coverage with no frontend in existence. Task and project
 lifecycle, due-date derivation and the pace readout all exercised as data.
 
+**Carried forward from T1, found by its final review.** The store is sound but its read
+surface is thinner than a frontend needs, and one thing must land before either frontend
+opens the database at all. These are opening items for the phases named, not optional
+polish:
+
+- **T3, before any frontend reads the store.** `jotter-store` does not depend on
+  `jotter-paths`, so the `jotter.db` filename would be decided separately by each
+  frontend. The day the two disagree, each app quietly opens a different database and
+  half the tasks vanish. One thin dependency and one function owning the default path
+  makes the compiler enforce it instead of discipline across two apps.
+- **T5, before the board is drawn.** Nothing lists projects, so a frontend cannot draw
+  the project list at all: the only ways to get a project are to create one or to look
+  one up by an id you already knew. Nothing lists a project's tasks either, so the board
+  can only ever show every task on the machine in a given state.
+- **T5.** A due date or a note can be set at creation and never changed. There is no way
+  to reschedule, no way to edit notes, no way to rename a project, and no archive command
+  despite the column existing. Today a slipped deadline means deleting the task and
+  retyping it, which takes its subtasks with it.
+
 ### T2: the terminal renderer, still no app
 
 - Split the parser: shared front half, owned document structure for the terminal.
