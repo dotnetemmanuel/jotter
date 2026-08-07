@@ -150,7 +150,9 @@ Body, two lines at most: that `crates/` is now GUI-free, and that the flat layou
 
 **Interfaces:**
 - Consumes: the crate layout from Task 1.
-- Produces: a crate named `jotter-paths` exposing two directory lookups, one for config and one for data, each returning a `PathBuf`. It also exposes the pure resolution function that both wrappers call, taking the override value and the platform base directory as arguments and returning the resolved path.
+- Produces: a crate named `jotter-paths` exposing two directory lookups, one for config and one for data. Each returns `Result<PathBuf, _>` with a `thiserror` error type, because finding the platform base directory can fail on a system with no home directory, and the global constraints forbid panicking in library code. It also exposes the pure resolution function that both wrappers call, taking the override value and an already-resolved base directory as arguments and returning a plain `PathBuf`, since with both inputs in hand the resolution itself cannot fail.
+
+  This makes `config_dir()` fallible at the GUI call site in `apps/jotter-gui-app/src/config.rs`, which currently calls it unconditionally. That crate uses `anyhow` at the boundary, so surfacing it there is the intended shape rather than a workaround.
 
 **The design constraint that matters:** the environment is process-global, and Rust runs tests in parallel threads. A test that sets an environment variable to check the override will race any other test reading it, and in edition 2024 setting one is `unsafe` for exactly that reason. So the resolution logic must be a pure function taking its inputs as arguments, with a thin wrapper that reads the environment and calls it. Test the pure function. Do not write tests that mutate the environment.
 
@@ -299,7 +301,7 @@ Expected: it fails, and the message names `jotter-theming`.
 Then remove the dependency and run it again.
 Expected: it passes.
 
-Do not commit the temporary dependency. Confirm with `git diff` that `crates/theming/Cargo.toml` is clean before the next step.
+Do not commit the temporary dependency. Resolving the tree rewrites `Cargo.lock` as well, so `git status` must show **both** `crates/theming/Cargo.toml` and `Cargo.lock` clean before the next step. Restore the lock with `git checkout -- Cargo.lock` if it moved.
 
 - [ ] **Step 4: Verify the portable job list is complete**
 
