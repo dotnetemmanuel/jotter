@@ -1,9 +1,12 @@
 [package]
-name = "jotter-editor"
+name = "jotter-gui"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "jotter-gui"
+path = "src/main.rs"
+
 [dependencies]
 gtk = { version = "0.11.4", package = "gtk4", features = ["v4_12"] }
-jotter-theming = { version = "0.1.0", path = "../theming" }
-sourceview5 = "0.11.1"
+jotter-gui-app = { version = "0.1.0", path = "../jotter-gui-app" }

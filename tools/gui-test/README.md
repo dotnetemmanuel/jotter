@@ -12,7 +12,7 @@ Nothing here is part of the app. It is excluded from the workspace so
 
 ```sh
 cargo build --release
-tools/gui-test/cage-run.sh ./target/release/jotter /path/to/test-vault
+tools/gui-test/cage-run.sh ./target/release/jotter-gui /path/to/test-vault
 ```
 
 The script prints the socket cage took, usually `wayland-0` when your desktop is
@@ -63,8 +63,8 @@ long enough for the drop highlight to settle, then release.
 
 ## Traps
 
-- **Never launch while a jotter is already running.** It is a single-instance app,
-  so the launch is handed to the running process and your headless one exits
+- **Never launch while a jotter-gui is already running.** It is a single-instance
+  app, so the launch is handed to the running process and your headless one exits
   immediately. `cage-run.sh` refuses to start in that case.
 - **Isolate the config.** `XDG_CONFIG_HOME=$(mktemp -d)` keeps test runs out of
   your real `~/.config/jotter/config.toml`, which otherwise collects test vaults

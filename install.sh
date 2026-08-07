@@ -3,12 +3,12 @@
 # binary, a desktop entry, and an icon, so it launches from the app launcher and
 # never dies with a terminal.
 #
-# Development keeps running ./target/release/jotter straight from the repo; this
-# script is the promotion step that moves the current build into daily use.
+# Development keeps running ./target/release/jotter-gui straight from the repo;
+# this script is the promotion step that moves the current build into daily use.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-BIN="$HOME/.local/bin/jotter"
+BIN="$HOME/.local/bin/jotter-gui"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
 APP_ID="dev.jotter.Jotter"
@@ -19,7 +19,7 @@ ICON_COLOR="#f6dcac"
 
 cargo build --release
 
-install -Dm755 target/release/jotter "$BIN"
+install -Dm755 target/release/jotter-gui "$BIN"
 
 mkdir -p "$ICONS"
 sed "s/currentColor/$ICON_COLOR/g" resources/icons/jotter.svg > "$ICONS/$APP_ID.svg"
@@ -57,5 +57,5 @@ EOF
 command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" || true
 
 echo "installed $(du -h "$BIN" | cut -f1) binary to $BIN"
-echo "launch: from the app launcher (jotter), or plain \"jotter\" in a shell"
-echo "a running jotter keeps its old build until it is restarted"
+echo "launch: from the app launcher (jotter), or plain \"jotter-gui\" in a shell"
+echo "a running jotter-gui keeps its old build until it is restarted"

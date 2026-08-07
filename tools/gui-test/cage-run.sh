@@ -2,7 +2,7 @@
 # Runs a command inside a headless cage compositor, off screen, and reports the
 # Wayland socket to point grim, wtype and wlpoint at.
 #
-# Usage: cage-run.sh ./target/release/jotter /path/to/vault
+# Usage: cage-run.sh ./target/release/jotter-gui /path/to/vault
 set -uo pipefail
 
 if [ $# -eq 0 ]; then
@@ -12,8 +12,8 @@ fi
 
 # A single-instance app hands the launch to the process already running, so the
 # headless one would exit at once and take cage with it.
-if pgrep -x jotter >/dev/null 2>&1; then
-    echo "a jotter is already running: quit it first, or the launch goes to that one" >&2
+if pgrep -x jotter-gui >/dev/null 2>&1; then
+    echo "a jotter-gui is already running: quit it first, or the launch goes to that one" >&2
     exit 1
 fi
 

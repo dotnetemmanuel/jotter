@@ -12,23 +12,26 @@ crates/
   parser/    comrak + wikilinks + syntect + frontmatter
   git/       git2 wrapper, credentials, sync status
   theming/   JSON theme loader, palette resolver, CSS/scheme generators
-  editor/    SourceView wrapper, key bindings, style scheme loader
-  preview/   WebKit wrapper, CSS injection, edit-preview transition
-  app/       glue crate, application state, command dispatcher
 apps/
-  jotter/    binary crate, wires everything, GTK Application (stays thin)
+  jotter-gui/         binary crate, wires everything, GTK Application (stays thin)
+  jotter-gui-app/     glue crate, application state, command dispatcher
+  jotter-gui-editor/  SourceView wrapper, key bindings, style scheme loader
+  jotter-gui-preview/ WebKit wrapper, CSS injection, edit-preview transition
 resources/
   ui/        .ui files (GTK Builder XML)
   themes/    bundled theme JSONC (retro82 default, event-horizon), each with a dark and light palette
   icons/     SVG icons (jotter.svg lives here)
 ```
 
+`crates/` holds only GTK-free core logic; every crate that touches GTK, GtkSourceView
+or WebKitGTK lives under `apps/`.
+
 ## Dependency direction
 
 ```
-binary -> app -> { vault, index, parser, git, theming, editor, preview }
-editor  -> theming        (consumes generated SourceView scheme)
-preview -> theming, parser (consumes generated preview CSS + rendered HTML)
+binary -> jotter-gui-app -> { vault, index, parser, git, theming, jotter-gui-editor, jotter-gui-preview }
+jotter-gui-editor  -> theming        (consumes generated SourceView scheme)
+jotter-gui-preview -> theming, parser (consumes generated preview CSS + rendered HTML)
 parser  -> theming        (syntect code theme derived from the theme code map)
 index   -> (standalone)
 vault   -> (standalone)
@@ -36,8 +39,9 @@ git     -> (standalone)
 theming -> (standalone, pure logic, no GTK)
 ```
 
-Each `crates/*` compiles standalone with its own tests. `app` owns the state graph
-and command dispatcher. The binary only constructs the GTK Application and hands off.
+Each `crates/*` compiles standalone with its own tests. `jotter-gui-app` owns the
+state graph and command dispatcher. The binary only constructs the GTK Application
+and hands off.
 
 ## Core data flow
 
@@ -158,7 +162,7 @@ theme file: `appearance::resolve` stamps it onto the resolved `Theme`, and
 `Theme::to_gtk_css` dispatches on it. Both styles draw from the same tokens,
 with `focus` carrying the structure (frames, rules, cursors) in TUI. The
 character-level idioms, tree markers, row cursors, upper-case headings,
-bracketed buttons and status segments, live in `crates/app/src/style.rs`,
+bracketed buttons and status segments, live in `apps/jotter-gui-app/src/style.rs`,
 re-applied by `restyle`, which `apply_theme` calls on every repaint and once
 more at startup.
 

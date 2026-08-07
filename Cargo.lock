@@ -986,24 +986,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "jotter"
+name = "jotter-git"
 version = "0.1.0"
 dependencies = [
- "gtk4",
- "jotter-app",
+ "git2",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
-name = "jotter-app"
+name = "jotter-gui"
+version = "0.1.0"
+dependencies = [
+ "gtk4",
+ "jotter-gui-app",
+]
+
+[[package]]
+name = "jotter-gui-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "gtk4",
- "jotter-editor",
  "jotter-git",
+ "jotter-gui-editor",
+ "jotter-gui-preview",
  "jotter-index",
  "jotter-parser",
- "jotter-preview",
  "jotter-search",
  "jotter-theming",
  "jotter-vault",
@@ -1013,7 +1022,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jotter-editor"
+name = "jotter-gui-editor"
 version = "0.1.0"
 dependencies = [
  "gtk4",
@@ -1022,12 +1031,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "jotter-git"
+name = "jotter-gui-preview"
 version = "0.1.0"
 dependencies = [
- "git2",
- "tempfile",
- "thiserror",
+ "gtk4",
+ "jotter-parser",
+ "jotter-theming",
+ "webkit6",
 ]
 
 [[package]]
@@ -1048,16 +1058,6 @@ dependencies = [
  "insta",
  "jotter-theming",
  "syntect",
-]
-
-[[package]]
-name = "jotter-preview"
-version = "0.1.0"
-dependencies = [
- "gtk4",
- "jotter-parser",
- "jotter-theming",
- "webkit6",
 ]
 
 [[package]]

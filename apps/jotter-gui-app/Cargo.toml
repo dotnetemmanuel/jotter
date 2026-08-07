@@ -1,0 +1,21 @@
+[package]
+name = "jotter-gui-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.103"
+gtk = { version = "0.11.4", package = "gtk4", features = ["v4_12"] }
+jotter-editor = { version = "0.1.0", package = "jotter-gui-editor", path = "../jotter-gui-editor" }
+jotter-git = { version = "0.1.0", path = "../../crates/git" }
+jotter-index = { version = "0.1.0", path = "../../crates/index" }
+jotter-parser = { version = "0.1.0", path = "../../crates/parser" }
+jotter-preview = { version = "0.1.0", package = "jotter-gui-preview", path = "../jotter-gui-preview" }
+jotter-search = { version = "0.1.0", path = "../../crates/search" }
+jotter-theming = { version = "0.1.0", path = "../../crates/theming" }
+jotter-vault = { version = "0.1.0", path = "../../crates/vault" }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.3"
+
+[dev-dependencies]
+tempfile = "3.27.0"
