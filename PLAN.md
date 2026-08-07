@@ -278,14 +278,24 @@ No user-visible change, and the GUI must behave identically at the end of it.
 Acceptance: the GUI opens a vault, edits, previews, searches and syncs exactly as
 before. The guard fails when a GTK dependency is added to a core crate on purpose.
 
-### T1: shared foundations, no UI
+### T1: the task database, no UI
 
-- `jotter-actions`: the catalog, plus the test that every action has a plain-key path.
-- `jotter-store`: `jotter.db`, forward-only numbered migrations gated on
-  `user_version`, refusing to open a database newer than the binary. Projects, tasks,
-  subtasks, and the app state moved out of the TOML file. Commands and queries only,
-  with no UI-shaped state, so the GUI is a rendering job later rather than a refactor.
-- Path resolution and the directory overrides.
+`jotter-store` alone: `jotter.db`, forward-only numbered migrations gated on
+`user_version`, refusing to open a database newer than the binary. Projects, tasks and
+subtasks, with due-date derivation and the pace readout. Commands and queries only,
+with no UI-shaped state, so the GUI is a rendering job later rather than a refactor.
+
+Purely additive. Nothing existing is touched, so nothing of the user's is at risk.
+
+Two things were cut from this phase after T0 landed:
+
+- **Moving app state out of `config.toml` waits for T3.** The reason to move it is that
+  two frontends rewriting one file clobber each other, and there is no second frontend
+  until T3. Doing it here would take a live-data change to a working app, risking every
+  recent vault and last-opened note, three phases before anything benefits.
+- **`jotter-actions` waits for T3.** Its only readers are the command palette and the
+  help sheet, both of which arrive there. A catalog with nothing reading it is a guess
+  at a shape, and the guess would be tested only once two consumers existed at once.
 
 Acceptance: full test coverage with no frontend in existence. Task and project
 lifecycle, due-date derivation and the pace readout all exercised as data.
@@ -307,8 +317,12 @@ truecolor and at 16 colours, with nothing panicking at any size.
 - ratatui and crossterm skeleton, modes, two panes, Enter and Escape, overlays.
 - Alternate scroll on, mouse never captured.
 - Vault open, tree, note open, read-only, with the preview renderer from T2.
+- `jotter-actions`, the action catalog, built here alongside its first two readers.
 - Switcher and command palette, generated from the catalog and ranked by
   `jotter-search`. The `?` sheet, also from the catalog.
+- Move the state jotter rewrites behind your back (recent vaults, last note per vault,
+  recent notes, expanded folders) out of `config.toml` and into `jotter.db`, now that a
+  second writer exists. Appearance settings stay in the TOML permanently.
 - The PTY test harness in `tools/tui-test/`, excluded from the workspace.
 
 Acceptance: navigate a real vault and read notes in it, driven end to end through the
