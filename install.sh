@@ -9,6 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 BIN="$HOME/.local/bin/jotter-gui"
+OLD_BIN="$HOME/.local/bin/jotter"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
 APP_ID="dev.jotter.Jotter"
@@ -20,6 +21,9 @@ ICON_COLOR="#f6dcac"
 cargo build --release
 
 install -Dm755 target/release/jotter-gui "$BIN"
+
+# The pre-rename binary shadows jotter-gui on PATH and would never be rebuilt again.
+rm -f "$OLD_BIN"
 
 mkdir -p "$ICONS"
 sed "s/currentColor/$ICON_COLOR/g" resources/icons/jotter.svg > "$ICONS/$APP_ID.svg"
