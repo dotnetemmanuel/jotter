@@ -4,7 +4,8 @@ A markdown vault app with two frontends over one set of core crates. A vault is 
 git-backed folder of plain `.md` files. Notes are files; tasks are not.
 
 - `jotter` is the terminal app (ratatui, crossterm), at `apps/jotter-tui/`.
-- `jotter-gui` is the GTK4 app, at `apps/jotter/`.
+- `jotter-gui` is the GTK4 app, at `apps/jotter-gui/`, with its GTK-only crates
+  alongside it as `apps/jotter-gui-app`, `-editor` and `-preview`.
 
 ## Read these first
 
