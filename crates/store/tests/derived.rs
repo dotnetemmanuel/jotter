@@ -1,4 +1,4 @@
-use jotter_store::{Store, TaskState, command, date, query};
+use jotter_store::{Store, StoreError, TaskState, command, date, query};
 use time::macros::date;
 
 #[test]
@@ -157,4 +157,81 @@ fn a_project_with_nothing_left_has_a_pace_of_zero_rather_than_no_pace() {
     .unwrap();
 
     assert_eq!(pace, Some(0.0));
+}
+
+#[test]
+fn overdue_tasks_lists_only_undone_tasks_past_their_date() {
+    let store = Store::open_in_memory().unwrap();
+    let today = date!(2026 - 08 - 04);
+    let overdue = command::create_task(&store, "Overdue", None, Some("2026-08-01"), None).unwrap();
+    command::create_task(&store, "Not yet due", None, Some("2026-08-10"), None).unwrap();
+    let done_but_late =
+        command::create_task(&store, "Done but late", None, Some("2026-01-01"), None).unwrap();
+    command::move_task_to_state(&store, done_but_late.id, TaskState::Done).unwrap();
+
+    let ids: Vec<i64> = query::overdue_tasks(&store, today)
+        .unwrap()
+        .iter()
+        .map(|task| task.id)
+        .collect();
+
+    assert_eq!(ids, vec![overdue.id]);
+}
+
+#[test]
+fn tasks_due_this_week_lists_only_undone_tasks_in_the_current_calendar_week() {
+    let store = Store::open_in_memory().unwrap();
+    // 2026-08-04 is a Tuesday; this calendar week runs Mon 2026-08-03 to Sun 2026-08-09.
+    let today = date!(2026 - 08 - 04);
+    let this_week =
+        command::create_task(&store, "This week", None, Some("2026-08-07"), None).unwrap();
+    command::create_task(&store, "Next week", None, Some("2026-08-10"), None).unwrap();
+    let done_this_week = command::create_task(
+        &store,
+        "Done, but this week",
+        None,
+        Some("2026-08-07"),
+        None,
+    )
+    .unwrap();
+    command::move_task_to_state(&store, done_this_week.id, TaskState::Done).unwrap();
+
+    let ids: Vec<i64> = query::tasks_due_this_week(&store, today)
+        .unwrap()
+        .iter()
+        .map(|task| task.id)
+        .collect();
+
+    assert_eq!(ids, vec![this_week.id]);
+}
+
+#[test]
+fn a_malformed_due_date_is_rejected_when_creating_a_task() {
+    let store = Store::open_in_memory().unwrap();
+
+    let err = command::create_task(&store, "Bad date", None, Some("tomorrow"), None).unwrap_err();
+
+    assert!(matches!(err, StoreError::InvalidDueDate(text) if text == "tomorrow"));
+}
+
+#[test]
+fn a_malformed_due_date_is_rejected_when_creating_a_project() {
+    let store = Store::open_in_memory().unwrap();
+
+    let err = command::create_project(&store, "Bad project", Some("not-a-date")).unwrap_err();
+
+    assert!(matches!(err, StoreError::InvalidDueDate(text) if text == "not-a-date"));
+}
+
+#[test]
+fn a_malformed_due_date_never_reaches_the_row() {
+    let store = Store::open_in_memory().unwrap();
+
+    let _ = command::create_task(&store, "Bad date", None, Some("tomorrow"), None);
+
+    assert!(
+        query::tasks_in_state(&store, TaskState::NotStarted)
+            .unwrap()
+            .is_empty()
+    );
 }

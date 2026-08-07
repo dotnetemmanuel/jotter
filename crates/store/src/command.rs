@@ -7,7 +7,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{Project, Store, StoreError, Subtask, Task, TaskState};
+use crate::{Project, Store, StoreError, Subtask, Task, TaskState, date};
 
 fn now_unix() -> i64 {
     let secs = SystemTime::now()
@@ -17,15 +17,27 @@ fn now_unix() -> i64 {
     i64::try_from(secs).unwrap_or(i64::MAX)
 }
 
+/// Checks a due date parses before it ever reaches the database, so a malformed
+/// value can never get in through a command; the read path stays strict and
+/// assumes anything stored already parses.
+fn check_due_date(due_date: Option<&str>) -> Result<(), StoreError> {
+    match due_date {
+        Some(text) => date::parse_due_date(text).map(|_| ()),
+        None => Ok(()),
+    }
+}
+
 /// Creates a project with the given name and optional due date.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the insert fails.
+/// Returns [`StoreError::InvalidDueDate`] if `due_date` is not `YYYY-MM-DD`, or
+/// [`StoreError::Sqlite`] if the insert fails.
 pub fn create_project(
     store: &Store,
     name: &str,
     due_date: Option<&str>,
 ) -> Result<Project, StoreError> {
+    check_due_date(due_date)?;
     let created_at = now_unix();
     store.conn.execute(
         "INSERT INTO projects (name, due_date, created_at, archived_at) VALUES (?1, ?2, ?3, NULL)",
@@ -55,7 +67,8 @@ pub fn delete_project(store: &Store, project_id: i64) -> Result<(), StoreError> 
 /// Creates a task, unstarted, optionally filed under a project.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the insert fails.
+/// Returns [`StoreError::InvalidDueDate`] if `due_date` is not `YYYY-MM-DD`, or
+/// [`StoreError::Sqlite`] if the insert fails.
 pub fn create_task(
     store: &Store,
     title: &str,
@@ -63,6 +76,7 @@ pub fn create_task(
     due_date: Option<&str>,
     notes: Option<&str>,
 ) -> Result<Task, StoreError> {
+    check_due_date(due_date)?;
     let created_at = now_unix();
     let state = TaskState::NotStarted;
     store.conn.execute(
