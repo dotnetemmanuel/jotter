@@ -3,7 +3,7 @@
 
 use rusqlite::Row;
 
-use crate::{Project, Store, StoreError, Task, TaskState};
+use crate::{Project, Store, StoreError, Subtask, Task, TaskState};
 
 struct TaskRow {
     id: i64,
@@ -102,4 +102,29 @@ pub fn tasks_in_state(store: &Store, state: TaskState) -> Result<Vec<Task>, Stor
         tasks.push(row_to_task(row?)?);
     }
     Ok(tasks)
+}
+
+/// Lists a task's subtasks in a stable order: insertion order, since `id` is
+/// monotonically increasing and, unlike the task's second-resolution
+/// `created_at`, never ties.
+///
+/// # Errors
+/// Returns [`StoreError::Sqlite`] if the query fails.
+pub fn subtasks_for_task(store: &Store, task_id: i64) -> Result<Vec<Subtask>, StoreError> {
+    let mut stmt = store.conn.prepare(
+        "SELECT id, task_id, title, done FROM subtasks WHERE task_id = ?1 ORDER BY id ASC",
+    )?;
+    let rows = stmt.query_map((task_id,), |row| {
+        Ok(Subtask {
+            id: row.get(0)?,
+            task_id: row.get(1)?,
+            title: row.get(2)?,
+            done: row.get(3)?,
+        })
+    })?;
+    let mut subtasks = Vec::new();
+    for row in rows {
+        subtasks.push(row?);
+    }
+    Ok(subtasks)
 }

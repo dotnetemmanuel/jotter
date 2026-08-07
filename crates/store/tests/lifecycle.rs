@@ -152,6 +152,84 @@ fn renaming_a_task_leaves_everything_else_alone() {
 }
 
 #[test]
+fn a_subtask_belongs_to_exactly_one_task() {
+    let store = Store::open_in_memory().unwrap();
+    let first = command::create_task(&store, "Plan the trip", None, None, None).unwrap();
+    let second = command::create_task(&store, "Pack", None, None, None).unwrap();
+
+    let subtask = command::add_subtask(&store, first.id, "Book flights").unwrap();
+    assert_eq!(subtask.task_id, first.id);
+    assert!(!subtask.done);
+
+    let first_subtasks = query::subtasks_for_task(&store, first.id).unwrap();
+    let second_subtasks = query::subtasks_for_task(&store, second.id).unwrap();
+    assert_eq!(first_subtasks, vec![subtask.clone()]);
+    assert!(second_subtasks.is_empty());
+
+    command::rename_subtask(&store, subtask.id, "Book flights and hotel").unwrap();
+    let renamed = query::subtasks_for_task(&store, first.id).unwrap();
+    assert_eq!(renamed[0].title, "Book flights and hotel");
+
+    command::remove_subtask(&store, subtask.id).unwrap();
+    assert!(
+        query::subtasks_for_task(&store, first.id)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn deleting_a_task_deletes_its_subtasks() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
+    command::add_subtask(&store, task.id, "Write changelog").unwrap();
+    command::add_subtask(&store, task.id, "Tag the release").unwrap();
+
+    command::delete_task(&store, task.id).unwrap();
+
+    assert!(query::get_task(&store, task.id).unwrap().is_none());
+    assert!(
+        query::subtasks_for_task(&store, task.id)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn subtasks_come_back_in_a_stable_order() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Launch", None, None, None).unwrap();
+    let one = command::add_subtask(&store, task.id, "Write docs").unwrap();
+    let two = command::add_subtask(&store, task.id, "Cut release").unwrap();
+    let three = command::add_subtask(&store, task.id, "Announce").unwrap();
+
+    let first_read = query::subtasks_for_task(&store, task.id).unwrap();
+    let second_read = query::subtasks_for_task(&store, task.id).unwrap();
+
+    let expected_ids = vec![one.id, two.id, three.id];
+    assert_eq!(
+        first_read.iter().map(|s| s.id).collect::<Vec<_>>(),
+        expected_ids
+    );
+    assert_eq!(first_read, second_read);
+}
+
+#[test]
+fn toggling_a_subtask_does_not_touch_its_task() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
+    command::move_task_to_state(&store, task.id, TaskState::Done).unwrap();
+    let before = query::get_task(&store, task.id).unwrap().unwrap();
+
+    let subtask = command::add_subtask(&store, task.id, "Write changelog").unwrap();
+    command::toggle_subtask(&store, subtask.id).unwrap();
+
+    let after = query::get_task(&store, task.id).unwrap().unwrap();
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.completed_at, before.completed_at);
+}
+
+#[test]
 fn an_unrecognised_state_in_the_database_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("tasks.db");
