@@ -127,35 +127,14 @@ impl Index {
     fn init(conn: Connection) -> Result<Self, IndexError> {
         // rusqlite does not enable foreign keys by default, so ON DELETE CASCADE needs this.
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        // journal_mode returns the resulting mode as a row, so pragma_update cannot set it.
+        // journal_mode and busy_timeout both return their new value as a row,
+        // so pragma_update cannot set either; pragma_update_and_check reads it back.
         let _: String =
             conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
-        // Per connection and never persisted, so a second writer waits instead of erroring.
-        conn.pragma_update(None, "busy_timeout", 5000)?;
+        let _: i64 = conn.pragma_update_and_check(None, "busy_timeout", 5000, |row| row.get(0))?;
         let index = Self { conn };
         index.run_migrations()?;
         Ok(index)
-    }
-
-    /// The connection's current journal mode, as `SQLite` reports it (for example
-    /// `"wal"` or `"delete"`; an in-memory database reports `"memory"`).
-    ///
-    /// # Errors
-    /// Returns [`IndexError::Sqlite`] on query failure.
-    pub fn journal_mode(&self) -> Result<String, IndexError> {
-        self.conn
-            .pragma_query_value(None, "journal_mode", |row| row.get(0))
-            .map_err(Into::into)
-    }
-
-    /// The connection's current busy timeout, in milliseconds.
-    ///
-    /// # Errors
-    /// Returns [`IndexError::Sqlite`] on query failure.
-    pub fn busy_timeout_ms(&self) -> Result<i64, IndexError> {
-        self.conn
-            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
-            .map_err(Into::into)
     }
 
     /// Applies each migration whose number exceeds `user_version`, in order, in a
@@ -671,6 +650,41 @@ mod tests {
             .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
             .unwrap();
         assert_eq!(on, 1);
+    }
+
+    #[test]
+    fn an_on_disk_index_is_in_wal_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = Index::open(dir.path().join("index.db")).unwrap();
+        let mode: String = index
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn wal_survives_a_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.db");
+        drop(Index::open(&path).unwrap());
+        let index = Index::open(&path).unwrap();
+        let mode: String = index
+            .conn
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+    }
+
+    // Already 5000 by rusqlite own default; this pins the contract value, not proof our call sets it.
+    #[test]
+    fn every_connection_gets_a_busy_timeout() {
+        let index = Index::open_in_memory().unwrap();
+        let timeout: i64 = index
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
     }
 
     #[test]
