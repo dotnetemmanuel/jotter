@@ -68,17 +68,24 @@ jobs:
       - name: Guard core crates against GTK dependencies
         run: |
           set -euo pipefail
+          metadata="$(cargo metadata --format-version 1 --no-deps)"
+          workspace_root="$(echo "$metadata" | jq -r '.workspace_root')"
+          packages="$(echo "$metadata" | jq -r --arg root "$workspace_root/crates/" '.packages[] | select(.manifest_path | startswith($root)) | .name')"
+          if [ -z "$packages" ]; then
+            echo "guard-core-is-gui-free: found no packages under crates/, refusing to pass on an empty check"
+            exit 1
+          fi
           forbidden='gtk|glib|gdk|pango|webkit|sourceview|gobject|graphene|cairo'
           failed=0
-          for pkg in jotter-git jotter-index jotter-parser jotter-paths jotter-search jotter-theming jotter-vault; do
+          while IFS= read -r pkg; do
             echo "checking $pkg"
-            tree_output="$(cargo tree --edges normal --package "$pkg")"
+            tree_output="$(cargo tree --edges normal --all-features --package "$pkg")"
             if matches="$(echo "$tree_output" | grep -Ei "$forbidden")"; then
               echo "GTK dependency found in $pkg:"
               echo "$matches"
               failed=1
             fi
-          done
+          done <<< "$packages"
           if [ "$failed" -ne 0 ]; then
             echo "guard-core-is-gui-free: FAILED"
             exit 1
