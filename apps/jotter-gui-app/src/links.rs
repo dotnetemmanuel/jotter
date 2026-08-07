@@ -81,7 +81,11 @@ impl Resolver {
             .collect();
 
         scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
-        scored.into_iter().take(limit).map(|(_, p)| p.clone()).collect()
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, p)| p.clone())
+            .collect()
     }
 
     /// The shortest target that unambiguously points at `path`.
@@ -186,7 +190,10 @@ pub fn new_note_path(target: &str, source: Option<&Path>) -> PathBuf {
     if normalized.contains('/') {
         return PathBuf::from(file);
     }
-    match source.and_then(Path::parent).filter(|p| !p.as_os_str().is_empty()) {
+    match source
+        .and_then(Path::parent)
+        .filter(|p| !p.as_os_str().is_empty())
+    {
         Some(dir) => dir.join(file),
         None => PathBuf::from(file),
     }
@@ -264,28 +271,46 @@ mod tests {
 
     #[test]
     fn bare_stem_matches_anywhere_in_the_vault() {
-        assert_eq!(resolver().lookup("retro").as_deref(), Some("archive/2024/retro.md"));
+        assert_eq!(
+            resolver().lookup("retro").as_deref(),
+            Some("archive/2024/retro.md")
+        );
     }
 
     #[test]
     fn stem_matching_ignores_case() {
-        assert_eq!(resolver().lookup("meeting notes").as_deref(), Some("Meeting Notes.md"));
+        assert_eq!(
+            resolver().lookup("meeting notes").as_deref(),
+            Some("Meeting Notes.md")
+        );
     }
 
     #[test]
     fn colliding_stems_resolve_to_the_first_path() {
-        assert_eq!(resolver().lookup("standup").as_deref(), Some("personal/standup.md"));
+        assert_eq!(
+            resolver().lookup("standup").as_deref(),
+            Some("personal/standup.md")
+        );
     }
 
     #[test]
     fn a_path_target_disambiguates() {
-        assert_eq!(resolver().lookup("work/standup").as_deref(), Some("work/standup.md"));
+        assert_eq!(
+            resolver().lookup("work/standup").as_deref(),
+            Some("work/standup.md")
+        );
     }
 
     #[test]
     fn the_md_suffix_is_optional() {
-        assert_eq!(resolver().lookup("work/standup.md").as_deref(), Some("work/standup.md"));
-        assert_eq!(resolver().lookup("retro.md").as_deref(), Some("archive/2024/retro.md"));
+        assert_eq!(
+            resolver().lookup("work/standup.md").as_deref(),
+            Some("work/standup.md")
+        );
+        assert_eq!(
+            resolver().lookup("retro.md").as_deref(),
+            Some("archive/2024/retro.md")
+        );
     }
 
     #[test]
@@ -297,12 +322,18 @@ mod tests {
 
     #[test]
     fn suggestions_catch_a_one_character_typo() {
-        assert_eq!(resolver().suggestions("standp", 5), ["personal/standup.md", "work/standup.md"]);
+        assert_eq!(
+            resolver().suggestions("standp", 5),
+            ["personal/standup.md", "work/standup.md"]
+        );
     }
 
     #[test]
     fn suggestions_ignore_separator_style() {
-        assert_eq!(resolver().suggestions("meeting-notes", 5), ["Meeting Notes.md"]);
+        assert_eq!(
+            resolver().suggestions("meeting-notes", 5),
+            ["Meeting Notes.md"]
+        );
     }
 
     #[test]
@@ -322,7 +353,10 @@ mod tests {
 
     #[test]
     fn shortest_target_falls_back_to_the_path_on_a_collision() {
-        assert_eq!(resolver().shortest_target("work/standup.md"), "work/standup");
+        assert_eq!(
+            resolver().shortest_target("work/standup.md"),
+            "work/standup"
+        );
     }
 
     #[test]
@@ -348,7 +382,10 @@ mod tests {
     fn note_uri_without_an_anchor_has_none() {
         assert_eq!(
             parse_uri("jotter-note:a.md"),
-            LinkTarget::Note { path: PathBuf::from("a.md"), anchor: None }
+            LinkTarget::Note {
+                path: PathBuf::from("a.md"),
+                anchor: None
+            }
         );
     }
 
@@ -370,13 +407,22 @@ mod tests {
 
     #[test]
     fn malformed_escapes_survive_decoding() {
-        assert_eq!(parse_uri("jotter-new:100%"), LinkTarget::New("100%".to_owned()));
-        assert_eq!(parse_uri("jotter-new:a%zz"), LinkTarget::New("a%zz".to_owned()));
+        assert_eq!(
+            parse_uri("jotter-new:100%"),
+            LinkTarget::New("100%".to_owned())
+        );
+        assert_eq!(
+            parse_uri("jotter-new:a%zz"),
+            LinkTarget::New("a%zz".to_owned())
+        );
     }
 
     #[test]
     fn multibyte_escapes_decode_to_utf8() {
-        assert_eq!(parse_uri("jotter-new:caf%C3%A9"), LinkTarget::New("café".to_owned()));
+        assert_eq!(
+            parse_uri("jotter-new:caf%C3%A9"),
+            LinkTarget::New("café".to_owned())
+        );
     }
 
     #[test]
@@ -394,6 +440,9 @@ mod tests {
     #[test]
     fn new_note_without_a_source_lands_at_the_root() {
         assert_eq!(new_note_path("ideas", None), Path::new("ideas.md"));
-        assert_eq!(new_note_path("ideas", Some(Path::new("top.md"))), Path::new("ideas.md"));
+        assert_eq!(
+            new_note_path("ideas", Some(Path::new("top.md"))),
+            Path::new("ideas.md")
+        );
     }
 }

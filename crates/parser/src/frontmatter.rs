@@ -37,7 +37,10 @@ pub fn parse(src: &str) -> Frontmatter {
 
     Frontmatter {
         title: string_at(&data, "title"),
-        tags: list_at(&data, "tags").iter().map(|tag| strip_hash(tag)).collect(),
+        tags: list_at(&data, "tags")
+            .iter()
+            .map(|tag| strip_hash(tag))
+            .collect(),
         aliases: list_at(&data, "aliases"),
         created: string_at(&data, "created"),
         updated: string_at(&data, "updated"),

@@ -146,8 +146,8 @@ pub fn deindex_note(index: &Index, rel: &Path) -> Result<()> {
 /// now (later phases populate them).
 fn build_record(vault: &Vault, rel: &Path, text: &str) -> Result<NoteRecord> {
     let abs = vault.root().join(rel);
-    let meta = std::fs::metadata(&abs)
-        .with_context(|| format!("read metadata {}", abs.display()))?;
+    let meta =
+        std::fs::metadata(&abs).with_context(|| format!("read metadata {}", abs.display()))?;
     let mtime = mtime_seconds(&meta);
     let size = i64::try_from(meta.len()).unwrap_or(i64::MAX);
     Ok(NoteRecord {
@@ -208,7 +208,10 @@ pub fn reconcile_in_thread<F: Fn(IndexProgress)>(root: &Path, report: &F) -> Res
         {
             eprintln!("jotter: could not index {}: {err}", note.rel_path.display());
         }
-        report(IndexProgress::Working { done: done + 1, total });
+        report(IndexProgress::Working {
+            done: done + 1,
+            total,
+        });
     }
 
     // Drop index rows whose file no longer exists on disk.
@@ -231,7 +234,7 @@ pub fn reconcile_in_thread<F: Fn(IndexProgress)>(root: &Path, report: &F) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::{rel_to_key, reconcile_in_thread};
+    use super::{reconcile_in_thread, rel_to_key};
     use std::path::Path;
     use tempfile::TempDir;
 

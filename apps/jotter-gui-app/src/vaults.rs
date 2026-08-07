@@ -48,8 +48,10 @@ pub fn known(recents: &[String]) -> Vec<Known> {
 
 /// The name to show for a vault: its folder name, or the path when there is none.
 fn name_of(path: &Path) -> String {
-    path.file_name()
-        .map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().to_string())
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().to_string(),
+    )
 }
 
 /// How many markdown files a folder holds, counting no further than the cap.
@@ -104,10 +106,7 @@ mod tests {
         let here = tmp.path().join("still-here");
         std::fs::create_dir(&here).unwrap();
 
-        let found = known(&[
-            gone.display().to_string(),
-            here.display().to_string(),
-        ]);
+        let found = known(&[gone.display().to_string(), here.display().to_string()]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, here);
     }

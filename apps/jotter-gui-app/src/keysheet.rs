@@ -102,7 +102,10 @@ pub fn sections(accel: &dyn Fn(&str) -> String) -> Vec<Section> {
             .iter()
             .filter_map(|(action, what)| {
                 let keys = accel(action);
-                (!keys.is_empty()).then(|| Binding { keys, what: (*what).to_owned() })
+                (!keys.is_empty()).then(|| Binding {
+                    keys,
+                    what: (*what).to_owned(),
+                })
             })
             .collect(),
     });
@@ -110,10 +113,16 @@ pub fn sections(accel: &dyn Fn(&str) -> String) -> Vec<Section> {
         name: (*name).to_owned(),
         bindings: rows
             .iter()
-            .map(|(keys, what)| Binding { keys: (*keys).to_owned(), what: (*what).to_owned() })
+            .map(|(keys, what)| Binding {
+                keys: (*keys).to_owned(),
+                what: (*what).to_owned(),
+            })
             .collect(),
     });
-    bound.chain(fixed).filter(|section| !section.bindings.is_empty()).collect()
+    bound
+        .chain(fixed)
+        .filter(|section| !section.bindings.is_empty())
+        .collect()
 }
 
 /// Shows the sheet over `parent`, closing on Escape or `Ctrl+H` again.
@@ -188,11 +197,20 @@ fn section_block(section: &Section, style: Style) -> gtk::Box {
     heading.add_css_class("keysheet-heading");
     block.append(&heading);
 
-    let grid = gtk::Grid::builder().row_spacing(4).column_spacing(14).build();
+    let grid = gtk::Grid::builder()
+        .row_spacing(4)
+        .column_spacing(14)
+        .build();
     for (row, binding) in section.bindings.iter().enumerate() {
-        let keys = gtk::Label::builder().label(&binding.keys).xalign(1.0).build();
+        let keys = gtk::Label::builder()
+            .label(&binding.keys)
+            .xalign(1.0)
+            .build();
         keys.add_css_class("keysheet-keys");
-        let what = gtk::Label::builder().label(&binding.what).xalign(0.0).build();
+        let what = gtk::Label::builder()
+            .label(&binding.what)
+            .xalign(0.0)
+            .build();
         let row = i32::try_from(row).unwrap_or(i32::MAX);
         grid.attach(&keys, 0, row, 1, 1);
         grid.attach(&what, 1, row, 1, 1);
@@ -206,7 +224,10 @@ mod tests {
     use super::{Binding, sections};
 
     fn all(action: &str) -> String {
-        format!("Ctrl+{}", action.chars().next().unwrap_or('x').to_uppercase())
+        format!(
+            "Ctrl+{}",
+            action.chars().next().unwrap_or('x').to_uppercase()
+        )
     }
 
     #[test]
@@ -231,13 +252,22 @@ mod tests {
         let found = sections(&|_| "Ctrl+S".to_owned());
         assert_eq!(
             found[0].bindings[0],
-            Binding { keys: "Ctrl+S".to_owned(), what: "Go to note".to_owned() }
+            Binding {
+                keys: "Ctrl+S".to_owned(),
+                what: "Go to note".to_owned()
+            }
         );
     }
 
     #[test]
     fn an_unbound_action_is_left_out() {
-        let found = sections(&|action| if action == "save" { String::new() } else { all(action) });
+        let found = sections(&|action| {
+            if action == "save" {
+                String::new()
+            } else {
+                all(action)
+            }
+        });
         let notes: Vec<&str> = found[0].bindings.iter().map(|b| b.what.as_str()).collect();
         assert_eq!(notes, ["Go to note", "Switch between edit and preview"]);
     }

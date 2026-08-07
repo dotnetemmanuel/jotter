@@ -7,9 +7,9 @@ mod appearance;
 mod backlinks;
 mod commands;
 mod complete;
+mod config;
 mod conflict_model;
 mod conflict_view;
-mod config;
 mod drill;
 mod fonts;
 mod git_panel;
@@ -320,7 +320,10 @@ fn reuse_window(state: &Rc<State>, path: Option<&str>) {
 /// What the app should open, resolved from the CLI arg and saved config.
 enum Startup {
     /// Open `root` as a vault, restoring `note` (vault-relative) if present.
-    Vault { root: PathBuf, note: Option<PathBuf> },
+    Vault {
+        root: PathBuf,
+        note: Option<PathBuf>,
+    },
     /// Open a single markdown file (no sidebar). `None` means the built-in sample.
     File(Option<PathBuf>),
 }
@@ -402,6 +405,8 @@ fn install_chrome_css(theme: &Theme) -> CssProvider {
 }
 
 /// Build the main window: sidebar, editor/preview stack, and status bar, wired up.
+// Crossed 100 lines only when rustfmt rewrapped it; the body did not grow.
+#[allow(clippy::too_many_lines)]
 fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     let config = Config::load();
     let (theme_file, theme) = startup_theme(&config)?;
@@ -419,7 +424,11 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
     stack.add_named(&preview.widget(), Some(PAGE_PREVIEW));
     // The mode jotter was left in, so closing in preview reopens in preview.
     // Set before any note loads: the load path renders the preview when it shows.
-    stack.set_visible_child_name(if config.preview_mode { PAGE_PREVIEW } else { PAGE_EDIT });
+    stack.set_visible_child_name(if config.preview_mode {
+        PAGE_PREVIEW
+    } else {
+        PAGE_EDIT
+    });
     stack.set_hexpand(true);
     stack.set_vexpand(true);
 
@@ -527,7 +536,9 @@ fn build_ui(app: &Application, path_arg: Option<&str>) -> Option<Rc<State>> {
         .position(240)
         .build();
 
-    state.overlay.set_child(Some(&assemble(&rail.widget(), &paned, &status_bar.bar)));
+    state
+        .overlay
+        .set_child(Some(&assemble(&rail.widget(), &paned, &status_bar.bar)));
 
     present_window(app, &state);
     Some(state)
@@ -839,17 +850,13 @@ fn browse_for_vault(state: &Rc<State>) {
         .modal(true)
         .build();
     let opening = Rc::clone(state);
-    dialog.select_folder(
-        parent.as_ref(),
-        None::<&gio::Cancellable>,
-        move |result| {
-            if let Ok(folder) = result
-                && let Some(path) = folder.path()
-            {
-                open_vault(&opening, &path, None);
-            }
-        },
-    );
+    dialog.select_folder(parent.as_ref(), None::<&gio::Cancellable>, move |result| {
+        if let Ok(folder) = result
+            && let Some(path) = folder.path()
+        {
+            open_vault(&opening, &path, None);
+        }
+    });
 }
 
 /// Opens `root`, asking first when the folder has never been a vault.
@@ -920,7 +927,10 @@ fn open_vault_now(state: &Rc<State>, root: &Path, note: Option<&Path>) {
     };
 
     let tree_model = build_tree(state, root);
-    restore_expanded(&tree_model, &state.config.borrow().expanded_folders_for(root));
+    restore_expanded(
+        &tree_model,
+        &state.config.borrow().expanded_folders_for(root),
+    );
 
     state.session.replace(Some(VaultSession {
         vault,
@@ -1038,7 +1048,10 @@ fn refresh_window_title(state: &Rc<State>) {
         .or_else(|| state.single_file.borrow().clone())
         .map(|rel| stem_of(&rel));
     if let Some(window) = state.overlay.root().and_downcast::<gtk::Window>() {
-        window.set_title(Some(&title::window_title(name.as_deref(), state.dirty.get())));
+        window.set_title(Some(&title::window_title(
+            name.as_deref(),
+            state.dirty.get(),
+        )));
     }
 }
 
@@ -1064,8 +1077,7 @@ fn refresh_backlinks(state: &Rc<State>) {
         .into_iter()
         .filter_map(|note| {
             let text = session.vault.read_note(Path::new(&note.path)).ok()?;
-            let snippets =
-                backlinks::linking_lines(&text, &target, &resolve, MAX_BACKLINK_LINES);
+            let snippets = backlinks::linking_lines(&text, &target, &resolve, MAX_BACKLINK_LINES);
             (!snippets.is_empty()).then_some(results::Hit {
                 path: note.path,
                 snippets,
@@ -1112,10 +1124,7 @@ fn build_tree(state: &Rc<State>, root: &Path) -> TreeListModel {
     let activate_sel = selection.clone();
     let activate_guard = Rc::clone(&clicked_row);
     list_view.connect_activate(move |_, position| {
-        let Some(row) = activate_sel
-            .item(position)
-            .and_downcast::<TreeListRow>()
-        else {
+        let Some(row) = activate_sel.item(position).and_downcast::<TreeListRow>() else {
             return;
         };
         if activate_guard.replace(false) {
@@ -1215,7 +1224,9 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
         };
         let (Some(gutter), Some(name), Some(title)) = (
             line.first_child().and_downcast::<Label>(),
-            line.first_child().and_then(|first| first.next_sibling()).and_downcast::<Label>(),
+            line.first_child()
+                .and_then(|first| first.next_sibling())
+                .and_downcast::<Label>(),
             line.last_child().and_downcast::<Label>(),
         ) else {
             return;
@@ -1255,7 +1266,9 @@ fn tree_factory(state: &Rc<State>) -> SignalListItemFactory {
         let handler = row.connect_notify_local(Some("expanded"), move |_, _| {
             refresh_gutter(&expanding, &listed);
         });
-        if let Some((old_row, old)) = binding.borrow_mut().insert(item.clone(), (row.clone(), handler))
+        if let Some((old_row, old)) = binding
+            .borrow_mut()
+            .insert(item.clone(), (row.clone(), handler))
         {
             old_row.disconnect(old);
         }
@@ -1304,7 +1317,10 @@ const DROP_SETTLE_MS: u64 = 120;
 /// The vault-relative path of the tree row a controller is attached to.
 fn row_path(widget: Option<&gtk::Widget>) -> Option<String> {
     let expander = widget?.downcast_ref::<TreeExpander>()?;
-    let node = expander.list_row()?.item().and_downcast::<gtk::StringObject>()?;
+    let node = expander
+        .list_row()?
+        .item()
+        .and_downcast::<gtk::StringObject>()?;
     Some(node.string().into())
 }
 
@@ -1404,7 +1420,8 @@ fn drop_landing(
         return (String::new(), None);
     };
     let dir = if is_file_node(state, &rel) {
-        rel.rsplit_once('/').map_or(String::new(), |(dir, _)| dir.to_owned())
+        rel.rsplit_once('/')
+            .map_or(String::new(), |(dir, _)| dir.to_owned())
     } else {
         rel
     };
@@ -1701,7 +1718,9 @@ fn start_git_polling(state: &Rc<State>, root: &Path) {
 /// Retires the current poll and hides the segment, for a vault change or a
 /// single file.
 fn stop_git(state: &Rc<State>) {
-    state.git_generation.set(state.git_generation.get().wrapping_add(1));
+    state
+        .git_generation
+        .set(state.git_generation.get().wrapping_add(1));
     state.git_tx.replace(None);
     state.git_last.replace(None);
     state.git.set_visible(false);
@@ -1833,7 +1852,9 @@ fn open_git_page(state: &Rc<State>) {
 /// what has changed since the last commit.
 fn refresh_git_page(state: &Rc<State>) {
     if rebase_pending(state) {
-        state.git_panel.show_conflicts(&state.conflict.file_progress());
+        state
+            .git_panel
+            .show_conflicts(&state.conflict.file_progress());
         return;
     }
     let changed = state
@@ -1876,8 +1897,12 @@ fn refresh_status_joiners(state: &Rc<State>) {
 /// Applies a status that arrived from the worker.
 fn show_git_status(state: &Rc<State>, status: jotter_git::Status) {
     let style = state.theme.borrow().style;
-    state.git.set_label(&style::segment(style, &git_status::label(&status)));
-    state.git.set_tooltip_text(Some(&git_status::tooltip(&status)));
+    state
+        .git
+        .set_label(&style::segment(style, &git_status::label(&status)));
+    state
+        .git
+        .set_tooltip_text(Some(&git_status::tooltip(&status)));
     state.git.set_visible(true);
     refresh_status_joiners(state);
     let showing = state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT);
@@ -1891,7 +1916,9 @@ fn show_git_status(state: &Rc<State>, status: jotter_git::Status) {
 fn refresh_git_segment(state: &Rc<State>) {
     let label = state.git_last.borrow().as_ref().map(git_status::label);
     if let Some(label) = label {
-        state.git.set_label(&style::segment(state.theme.borrow().style, &label));
+        state
+            .git
+            .set_label(&style::segment(state.theme.borrow().style, &label));
     }
 }
 
@@ -2133,11 +2160,19 @@ fn wire_actions(app: &Application, state: &Rc<State>) {
 /// way and stepping it never puts the two panes out of step.
 fn wire_font_size(app: &Application, state: &Rc<State>) {
     for (name, up, accels) in [
-        ("font-bigger", true, ["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"]),
+        (
+            "font-bigger",
+            true,
+            ["<Primary>plus", "<Primary>equal", "<Primary>KP_Add"],
+        ),
         (
             "font-smaller",
             false,
-            ["<Primary>minus", "<Primary>underscore", "<Primary>KP_Subtract"],
+            [
+                "<Primary>minus",
+                "<Primary>underscore",
+                "<Primary>KP_Subtract",
+            ],
         ),
     ] {
         let action = gio::SimpleAction::new(name, None);
@@ -2176,7 +2211,9 @@ fn refresh_size_indicator(state: &Rc<State>) {
     let chosen = stray_font_size(state);
     if let Some(size) = chosen {
         let style = state.theme.borrow().style;
-        state.size.set_label(&style::segment(style, &format!("{size}px \u{21ba}")));
+        state
+            .size
+            .set_label(&style::segment(style, &format!("{size}px \u{21ba}")));
     }
     state.size.set_visible(chosen.is_some());
     refresh_status_joiners(state);
@@ -2245,7 +2282,9 @@ fn wire_settings(app: &Application, state: &Rc<State>) {
     app.set_accels_for_action("app.keys", &["<Primary>h"]);
 
     let clicked = Rc::clone(state);
-    state.size.connect_clicked(move |_| reset_font_size(&clicked));
+    state
+        .size
+        .connect_clicked(move |_| reset_font_size(&clicked));
     refresh_size_indicator(state);
 }
 
@@ -2281,12 +2320,18 @@ fn wire_git(app: &Application, state: &Rc<State>) {
 
     // The segment is the way into the page, the way the broken-link count is.
     let clicked = Rc::clone(state);
-    state.git.connect_clicked(move |_| toggle_git_page(&clicked));
+    state
+        .git
+        .connect_clicked(move |_| toggle_git_page(&clicked));
 
     let escaping = Rc::clone(state);
-    state.git_panel.connect_escape(move || close_git_page(&escaping));
+    state
+        .git_panel
+        .connect_escape(move || close_git_page(&escaping));
     let going_back = Rc::clone(state);
-    state.git_panel.connect_back(move || close_git_page(&going_back));
+    state
+        .git_panel
+        .connect_back(move || close_git_page(&going_back));
 }
 
 /// Puts the tree back and returns focus to the editor.
@@ -2309,7 +2354,10 @@ fn untrack_jotter(state: &Rc<State>) {
         return;
     };
     match repo.untrack_jotter() {
-        Ok(()) => say(state, "The jotter index is no longer tracked. Commit to record it."),
+        Ok(()) => say(
+            state,
+            "The jotter index is no longer tracked. Commit to record it.",
+        ),
         Err(err) => {
             eprintln!("jotter: could not untrack the index: {err}");
             say(state, &format!("Could not untrack: {err}"));
@@ -2330,9 +2378,13 @@ fn wire_report(app: &Application, state: &Rc<State>) {
     state.broken.connect_clicked(move |_| show_report(&clicked));
 
     let escaping = Rc::clone(state);
-    state.report_panel.connect_escape(move || report_back(&escaping));
+    state
+        .report_panel
+        .connect_escape(move || report_back(&escaping));
     let going_back = Rc::clone(state);
-    state.report_panel.connect_back(move || report_back(&going_back));
+    state
+        .report_panel
+        .connect_back(move || report_back(&going_back));
 }
 
 /// Steps the report back one level, leaving the sidebar when already at the top.
@@ -2386,7 +2438,10 @@ fn refresh_broken(state: &Rc<State>) {
         return;
     };
     let style = state.theme.borrow().style;
-    state.broken.set_label(&style::segment(style, &style::broken_links(style, missing.len())));
+    state.broken.set_label(&style::segment(
+        style,
+        &style::broken_links(style, missing.len()),
+    ));
     state.broken.set_visible(!missing.is_empty());
     refresh_status_joiners(state);
 
@@ -2420,8 +2475,7 @@ fn show_broken_linkers(state: &Rc<State>, missing: &str) {
         .into_iter()
         .filter_map(|note| {
             let text = session.vault.read_note(Path::new(&note.path)).ok()?;
-            let snippets =
-                backlinks::linking_lines(&text, missing, &written, MAX_BACKLINK_LINES);
+            let snippets = backlinks::linking_lines(&text, missing, &written, MAX_BACKLINK_LINES);
             (!snippets.is_empty()).then_some(results::Hit {
                 path: note.path,
                 snippets,
@@ -2442,9 +2496,13 @@ fn wire_tags(app: &Application, state: &Rc<State>) {
 
     // Escape and the back arrow both step one level: notes to tags, tags to tree.
     let escaping = Rc::clone(state);
-    state.tags_panel.connect_escape(move || tags_back(&escaping));
+    state
+        .tags_panel
+        .connect_escape(move || tags_back(&escaping));
     let going_back = Rc::clone(state);
-    state.tags_panel.connect_back(move || tags_back(&going_back));
+    state
+        .tags_panel
+        .connect_back(move || tags_back(&going_back));
 }
 
 /// Steps the tag page back one level, leaving the sidebar when already at the top.
@@ -2680,7 +2738,11 @@ fn open_keysheet(state: &Rc<State>) {
 }
 
 fn open_settings(state: &Rc<State>) {
-    let open = state.settings.borrow().as_ref().map(|handle| handle.window.clone());
+    let open = state
+        .settings
+        .borrow()
+        .as_ref()
+        .map(|handle| handle.window.clone());
     if let Some(window) = open {
         window.close();
         return;
@@ -2703,7 +2765,9 @@ fn open_settings(state: &Rc<State>) {
     let current = {
         let theme = state.theme.borrow();
         let look = &state.config.borrow().appearance;
-        let typography = bare.as_ref().map_or(&theme.typography, |bare| &bare.typography);
+        let typography = bare
+            .as_ref()
+            .map_or(&theme.typography, |bare| &bare.typography);
         settings::Current {
             theme: state.theme_file.borrow().id.clone(),
             mode: theme.mode,
@@ -2781,7 +2845,9 @@ fn handle_conflict_request(state: &Rc<State>, request: &conflict_view::Request) 
 /// Writes every answer to disk, staging the notes that are fully answered.
 fn write_answers(state: &Rc<State>) {
     if state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT) {
-        state.git_panel.show_conflicts(&state.conflict.file_progress());
+        state
+            .git_panel
+            .show_conflicts(&state.conflict.file_progress());
     }
     let Some(repo) = vault_repo(state) else {
         return;
@@ -2810,7 +2876,10 @@ fn finish_rebase(state: &Rc<State>) {
         Ok(()) => {
             leave_conflicts(state);
             reload_current_note(state);
-            say(state, "Conflicts resolved, rebase finished. Sync again to push.");
+            say(
+                state,
+                "Conflicts resolved, rebase finished. Sync again to push.",
+            );
         }
         Err(err) => {
             eprintln!("jotter: could not continue the rebase: {err}");
@@ -2907,7 +2976,9 @@ fn enter_conflicts(state: &Rc<State>) {
     // The rail counts what the resolver holds, so it follows the rebuild rather
     // than showing the answers of a model that no longer exists.
     if state.sidebar_stack.visible_child_name().as_deref() == Some(PAGE_GIT) {
-        state.git_panel.show_conflicts(&state.conflict.file_progress());
+        state
+            .git_panel
+            .show_conflicts(&state.conflict.file_progress());
     }
     state.stack.set_visible_child_name(PAGE_CONFLICT);
     // The page has not been laid out yet, and an unrealised widget refuses
@@ -2961,9 +3032,13 @@ fn wire_search(app: &Application, state: &Rc<State>) {
     });
 
     let escaping = Rc::clone(state);
-    state.search_panel.connect_escape(move || close_search(&escaping));
+    state
+        .search_panel
+        .connect_escape(move || close_search(&escaping));
     let going_back = Rc::clone(state);
-    state.search_panel.connect_back(move || close_search(&going_back));
+    state
+        .search_panel
+        .connect_back(move || close_search(&going_back));
 }
 
 /// Reveals the search page and puts the caret in its entry.
@@ -3100,7 +3175,9 @@ fn accept_completion(state: &Rc<State>) {
     };
     let (replacement, offset) = complete::insertion(&target, context.closed);
     state.completion.hide();
-    state.editor.replace_range(context.range, &replacement, offset);
+    state
+        .editor
+        .replace_range(context.range, &replacement, offset);
 }
 
 /// Every note as the shortest link target that reaches it.
@@ -3443,7 +3520,12 @@ fn apply_theme(state: &Rc<State>, next: Theme) {
         let text = state.editor.text();
         let rendered = render_markdown(state, &text);
         state.preview.rerender_preserving_scroll(&rendered.html);
-        remember_loaded(state, text, state.render_generation.get(), rendered.headings);
+        remember_loaded(
+            state,
+            text,
+            state.render_generation.get(),
+            rendered.headings,
+        );
     }
     refresh_editor_links(state);
     restyle(state);
@@ -3486,7 +3568,9 @@ fn refresh_vault_name(state: &Rc<State>) {
     let name = vaults::known(&[root.display().to_string()])
         .first()
         .map_or_else(|| root.display().to_string(), |vault| vault.name.clone());
-    state.vault_name.set_text(&style::heading(state.theme.borrow().style, &name));
+    state
+        .vault_name
+        .set_text(&style::heading(state.theme.borrow().style, &name));
 }
 
 /// Render the editor text with the active theme and the vault's link resolver.
@@ -3511,9 +3595,7 @@ fn render_markdown(state: &Rc<State>, text: &str) -> jotter_parser::Rendered {
     );
     let locator = images::Locator::new(base, vault, &found);
     let rendered = match session.as_ref() {
-        Some(session) => {
-            jotter_parser::render(text, code, &*session.resolver.borrow(), &locator)
-        }
+        Some(session) => jotter_parser::render(text, code, &*session.resolver.borrow(), &locator),
         None => jotter_parser::render(text, code, &Resolver::default(), &locator),
     };
     for (name, path) in found.into_inner() {
@@ -3610,18 +3692,22 @@ fn remember_loaded(
 /// (CSS and code colors), the preview zoom, wikilink resolution, and the folder
 /// relative image paths are resolved against.
 fn invalidate_preview(state: &Rc<State>) {
-    state.render_generation.set(state.render_generation.get() + 1);
+    state
+        .render_generation
+        .set(state.render_generation.get() + 1);
 }
 
 /// Route links clicked in the preview: notes open here, unresolved ones prompt,
 /// and anything else goes to the system browser rather than hijacking the pane.
 fn wire_preview_links(state: &Rc<State>) {
     let link_state = Rc::clone(state);
-    state.preview.connect_link_clicked(move |uri| match links::parse_uri(uri) {
-        LinkTarget::Note { path, anchor } => open_note_link(&link_state, &path, anchor),
-        LinkTarget::New(target) => follow_broken_link(&link_state, &target),
-        LinkTarget::External(uri) => launch_external(&uri),
-    });
+    state
+        .preview
+        .connect_link_clicked(move |uri| match links::parse_uri(uri) {
+            LinkTarget::Note { path, anchor } => open_note_link(&link_state, &path, anchor),
+            LinkTarget::New(target) => follow_broken_link(&link_state, &target),
+            LinkTarget::External(uri) => launch_external(&uri),
+        });
 }
 
 /// Ctrl+Click in the editor follows the wikilink under the pointer.
@@ -3642,7 +3728,10 @@ fn wire_editor_links(state: &Rc<State>) {
             .and_then(|session| session.resolver.borrow().lookup(&link.target));
         match resolved {
             Some(path) => {
-                let anchor = link.heading.as_deref().map(jotter_parser::wikilink::anchor_slug);
+                let anchor = link
+                    .heading
+                    .as_deref()
+                    .map(jotter_parser::wikilink::anchor_slug);
                 open_note_link(&link_state, Path::new(&path), anchor);
             }
             None => follow_broken_link(&link_state, &link.target),
@@ -3674,7 +3763,12 @@ fn follow_broken_link(state: &Rc<State>, target: &str) {
         .session
         .borrow()
         .as_ref()
-        .map(|session| session.resolver.borrow().suggestions(target, MAX_SUGGESTIONS))
+        .map(|session| {
+            session
+                .resolver
+                .borrow()
+                .suggestions(target, MAX_SUGGESTIONS)
+        })
         .unwrap_or_default();
 
     if suggestions.is_empty() {
@@ -3720,7 +3814,12 @@ fn choose_link_target(state: &Rc<State>, target: &str, suggestions: &[String]) {
         list.append(&gtk::Label::builder().label(path).xalign(0.0).build());
     }
     let create_label = format!("Create \"{target}\"");
-    list.append(&gtk::Label::builder().label(&create_label).xalign(0.0).build());
+    list.append(
+        &gtk::Label::builder()
+            .label(&create_label)
+            .xalign(0.0)
+            .build(),
+    );
     content.append(&list);
     dialog.set_child(Some(&content));
 
@@ -3907,15 +4006,11 @@ fn save_single_file(state: &Rc<State>, text: &str) -> Option<String> {
 /// Hand a non-note uri to the desktop, so the preview never navigates away.
 fn launch_external(uri: &str) {
     let launcher = gtk::UriLauncher::new(uri);
-    launcher.launch(
-        None::<&gtk::Window>,
-        None::<&gio::Cancellable>,
-        |result| {
-            if let Err(err) = result {
-                eprintln!("jotter: could not open link: {err}");
-            }
-        },
-    );
+    launcher.launch(None::<&gtk::Window>, None::<&gio::Cancellable>, |result| {
+        if let Err(err) = result {
+            eprintln!("jotter: could not open link: {err}");
+        }
+    });
 }
 
 /// Pick the anchor for the heading nearest at or above `caret_1based`.
@@ -4091,7 +4186,10 @@ fn changed_the_open_note(state: &Rc<State>, change: &VaultChange) -> bool {
 /// alone and says so, which is the only honest option without a merge.
 fn reload_externally_changed(state: &Rc<State>) {
     if state.dirty.get() {
-        say(state, "Changed on disk. Your unsaved edits are kept (Ctrl+S to overwrite)");
+        say(
+            state,
+            "Changed on disk. Your unsaved edits are kept (Ctrl+S to overwrite)",
+        );
         return;
     }
     let caret = state.editor.caret_line();
@@ -4121,8 +4219,13 @@ fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
                 session.index.mtime_by_path(&vault_session::rel_to_key(rel)),
                 Ok(Some(_))
             );
-            if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, rel) {
-                eprintln!("jotter: reindex on change failed for {}: {err}", rel.display());
+            if let Err(err) =
+                vault_session::reindex_note_resolved(&session.vault, &session.index, rel)
+            {
+                eprintln!(
+                    "jotter: reindex on change failed for {}: {err}",
+                    rel.display()
+                );
             }
             is_new
         }
@@ -4134,10 +4237,18 @@ fn apply_change(state: &Rc<State>, change: &VaultChange) -> bool {
         }
         VaultChange::Renamed { from, to } => {
             if let Err(err) = vault_session::deindex_note(&session.index, from) {
-                eprintln!("jotter: deindex on rename failed for {}: {err}", from.display());
+                eprintln!(
+                    "jotter: deindex on rename failed for {}: {err}",
+                    from.display()
+                );
             }
-            if let Err(err) = vault_session::reindex_note_resolved(&session.vault, &session.index, to) {
-                eprintln!("jotter: reindex on rename failed for {}: {err}", to.display());
+            if let Err(err) =
+                vault_session::reindex_note_resolved(&session.vault, &session.index, to)
+            {
+                eprintln!(
+                    "jotter: reindex on rename failed for {}: {err}",
+                    to.display()
+                );
             }
             true
         }
@@ -4344,7 +4455,11 @@ fn install_tree_actions(state: &Rc<State>, target: &Rc<RefCell<Option<PathBuf>>>
             .and_then(|n| n.to_str())
             .unwrap_or("note.md")
             .to_owned();
-        let title = if is_file { "Rename note" } else { "Rename folder" };
+        let title = if is_file {
+            "Rename note"
+        } else {
+            "Rename folder"
+        };
         let s2 = Rc::clone(&s);
         prompt(&s, title, &default, move |name| {
             if is_file {
@@ -4419,7 +4534,11 @@ fn rename_folder(state: &Rc<State>, rel: &Path, name: &str) {
     if name.is_empty() || rel.as_os_str().is_empty() {
         return;
     }
-    let to = rel.parent().map(Path::to_path_buf).unwrap_or_default().join(name);
+    let to = rel
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+        .join(name);
     relocate(state, rel, &to);
 }
 
@@ -4557,7 +4676,8 @@ fn create_note_at(state: &Rc<State>, rel: &Path) {
                 .create_note(rel, format!("# {}\n\n", stem_of(rel)))
             {
                 Ok(()) => {
-                    let _ = vault_session::reindex_note_resolved(&session.vault, &session.index, rel);
+                    let _ =
+                        vault_session::reindex_note_resolved(&session.vault, &session.index, rel);
                     true
                 }
                 Err(err) => {
@@ -4643,7 +4763,10 @@ fn px_to_i32(value: f64) -> i32 {
         i32::MIN
     } else {
         // Clamped into i32 range above, so this conversion is exact and lossless.
-        #[allow(clippy::cast_possible_truncation, reason = "value is clamped to i32 range")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "value is clamped to i32 range"
+        )]
         {
             rounded as i32
         }
@@ -4879,7 +5002,10 @@ mod tests {
     #[test]
     fn no_arg_no_config_uses_sample() {
         let config = Config::default();
-        assert!(matches!(resolve_startup(None, &config), Startup::File(None)));
+        assert!(matches!(
+            resolve_startup(None, &config),
+            Startup::File(None)
+        ));
     }
 
     #[test]

@@ -37,7 +37,10 @@ fn a_tag_may_not_start_with_a_digit() {
 
 #[test]
 fn dashes_underscores_and_slashes_are_part_of_a_tag() {
-    assert_eq!(scan("#phase-1 #my_tag #work/urgent"), ["phase-1", "my_tag", "work/urgent"]);
+    assert_eq!(
+        scan("#phase-1 #my_tag #work/urgent"),
+        ["phase-1", "my_tag", "work/urgent"]
+    );
 }
 
 #[test]

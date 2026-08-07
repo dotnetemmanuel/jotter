@@ -5,8 +5,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use gtk::prelude::*;
 use gtk::Orientation;
+use gtk::prelude::*;
 
 use jotter_theming::Style;
 
@@ -145,7 +145,8 @@ impl List {
             ));
             targets.push((hit.path.clone(), 0));
             for snippet in &hit.snippets {
-                self.rows.append(&snippet_row(snippet, &self.accent.borrow()));
+                self.rows
+                    .append(&snippet_row(snippet, &self.accent.borrow()));
                 targets.push((hit.path.clone(), snippet.line));
             }
         }
@@ -171,7 +172,11 @@ impl List {
 
     /// The row leading to `target`, once the rows have been rebuilt.
     fn row_for(&self, target: &(String, i32)) -> Option<gtk::ListBoxRow> {
-        let index = self.targets.borrow().iter().position(|held| held == target)?;
+        let index = self
+            .targets
+            .borrow()
+            .iter()
+            .position(|held| held == target)?;
         self.rows.row_at_index(i32::try_from(index).ok()?)
     }
 }
@@ -296,17 +301,11 @@ mod tests {
 
     #[test]
     fn a_root_note_has_no_folder() {
-        assert_eq!(
-            split_path("plan.md"),
-            (String::new(), "plan".to_string())
-        );
+        assert_eq!(split_path("plan.md"), (String::new(), "plan".to_string()));
     }
 
     #[test]
     fn a_deep_note_keeps_its_whole_folder_path() {
-        assert_eq!(
-            split_path("a/b/c.md"),
-            ("a/b".to_string(), "c".to_string())
-        );
+        assert_eq!(split_path("a/b/c.md"), ("a/b".to_string(), "c".to_string()));
     }
 }

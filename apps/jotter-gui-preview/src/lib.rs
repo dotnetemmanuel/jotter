@@ -316,7 +316,9 @@ fn js_string_literal(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{file_uri, js_string_literal, preview_file_name, scroll_to_anchor_js, wrap_document};
+    use super::{
+        file_uri, js_string_literal, preview_file_name, scroll_to_anchor_js, wrap_document,
+    };
     use std::path::Path;
 
     #[test]
@@ -376,9 +378,15 @@ mod zoom_correction {
 
     /// The correction the browser actually applies: the last body rule wins.
     fn effective(css: &str) -> f64 {
-        let rule = css.rmatch_indices("body { font-size:").next().expect("a correction");
+        let rule = css
+            .rmatch_indices("body { font-size:")
+            .next()
+            .expect("a correction");
         let rest = &css[rule.0 + rule.1.len()..];
-        rest[..rest.find("px").expect("px")].trim().parse().expect("a number")
+        rest[..rest.find("px").expect("px")]
+            .trim()
+            .parse()
+            .expect("a number")
     }
 
     #[test]
@@ -396,7 +404,10 @@ mod zoom_correction {
             let css = compose_css(THEME, zoom);
             // What the reader sees: the corrected size scaled back up by the zoom.
             let rendered = effective(&css) * zoom;
-            assert!((rendered - 15.0).abs() < 0.01, "zoom {zoom} rendered {rendered}");
+            assert!(
+                (rendered - 15.0).abs() < 0.01,
+                "zoom {zoom} rendered {rendered}"
+            );
         }
     }
 

@@ -133,7 +133,10 @@ fn scan_all(src: &str) -> (Vec<Wikilink>, Vec<Range<usize>>) {
         match bytes[i] {
             // An escape hides the bracket that follows, so \[[x]] is not a link.
             b'\\' => {
-                i = match opening_at(bytes, i + 1).then(|| parse_at(src, i + 1)).flatten() {
+                i = match opening_at(bytes, i + 1)
+                    .then(|| parse_at(src, i + 1))
+                    .flatten()
+                {
                     Some(link) => {
                         let end = link.range.end;
                         inert.push(i..end);
@@ -532,7 +535,10 @@ mod tests {
 
     #[test]
     fn code_block_inside_a_list_item_is_skipped() {
-        assert_eq!(targets("- item\n\n  ```\n  [[fake]]\n  ```\n\n[[real]]\n"), ["real"]);
+        assert_eq!(
+            targets("- item\n\n  ```\n  [[fake]]\n  ```\n\n[[real]]\n"),
+            ["real"]
+        );
     }
 
     /// Resolves any target whose stem is "standup", to a path with a space in it.
@@ -574,7 +580,10 @@ mod tests {
 
     #[test]
     fn heading_on_a_broken_link_is_dropped() {
-        assert_eq!(rewrite("[[gone#Head]]", &stub), "[gone > Head](jotter-new:gone)");
+        assert_eq!(
+            rewrite("[[gone#Head]]", &stub),
+            "[gone > Head](jotter-new:gone)"
+        );
     }
 
     #[test]

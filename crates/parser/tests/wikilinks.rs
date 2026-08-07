@@ -25,7 +25,13 @@ fn stub(target: &str) -> Option<String> {
 
 #[test]
 fn resolved_and_broken_links_survive_to_html() {
-    let html = render("See [[standup]] and [[missing]].\n", &test_code(), &stub, &jotter_parser::NoImages).html;
+    let html = render(
+        "See [[standup]] and [[missing]].\n",
+        &test_code(),
+        &stub,
+        &jotter_parser::NoImages,
+    )
+    .html;
     assert!(
         html.contains(r#"href="jotter-note:work/standup.md""#),
         "custom scheme must not be filtered out: {html}"
@@ -38,9 +44,18 @@ fn resolved_and_broken_links_survive_to_html() {
 
 #[test]
 fn links_in_code_are_left_as_text() {
-    let html = render("```\n[[standup]]\n```\n", &test_code(), &stub, &jotter_parser::NoImages).html;
+    let html = render(
+        "```\n[[standup]]\n```\n",
+        &test_code(),
+        &stub,
+        &jotter_parser::NoImages,
+    )
+    .html;
     assert!(!html.contains("jotter-note:"), "code must not be linkified");
-    assert!(html.contains("[[standup]]"), "code must keep its text: {html}");
+    assert!(
+        html.contains("[[standup]]"),
+        "code must keep its text: {html}"
+    );
 }
 
 #[test]

@@ -275,7 +275,8 @@ fn kind_of(status: git2::Status) -> Option<ChangeKind> {
     if status.intersects(S::WT_NEW | S::INDEX_NEW) {
         return Some(ChangeKind::New);
     }
-    if status.intersects(S::WT_MODIFIED | S::INDEX_MODIFIED | S::WT_TYPECHANGE | S::INDEX_TYPECHANGE)
+    if status
+        .intersects(S::WT_MODIFIED | S::INDEX_MODIFIED | S::WT_TYPECHANGE | S::INDEX_TYPECHANGE)
     {
         return Some(ChangeKind::Modified);
     }

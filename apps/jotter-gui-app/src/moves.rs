@@ -151,7 +151,11 @@ pub fn plan(vault: &Vault, index: &Index, from: &Path, to: &Path) -> Plan {
         }
     }
     linkers.sort();
-    Plan { moved, linkers, before }
+    Plan {
+        moved,
+        linkers,
+        before,
+    }
 }
 
 /// Notes that stay put but share a filename stem with one that is moving.
@@ -232,7 +236,10 @@ mod tests {
 
     #[test]
     fn a_note_moves_into_a_folder() {
-        assert_eq!(destination("plan.md", "work").as_deref(), Some("work/plan.md"));
+        assert_eq!(
+            destination("plan.md", "work").as_deref(),
+            Some("work/plan.md")
+        );
     }
 
     #[test]
@@ -250,7 +257,10 @@ mod tests {
 
     #[test]
     fn a_folder_moves_with_its_name() {
-        assert_eq!(destination("work", "archive").as_deref(), Some("archive/work"));
+        assert_eq!(
+            destination("work", "archive").as_deref(),
+            Some("archive/work")
+        );
     }
 
     #[test]
@@ -271,7 +281,10 @@ mod tests {
 
     #[test]
     fn a_sibling_prefix_is_not_a_subtree() {
-        assert_eq!(destination("work", "workshop").as_deref(), Some("workshop/work"));
+        assert_eq!(
+            destination("work", "workshop").as_deref(),
+            Some("workshop/work")
+        );
     }
 
     #[test]
@@ -281,7 +294,10 @@ mod tests {
 
     #[test]
     fn a_path_form_link_stays_path_form() {
-        assert_eq!(new_target("notes/plan", "work/plan.md", "plan"), "work/plan");
+        assert_eq!(
+            new_target("notes/plan", "work/plan.md", "plan"),
+            "work/plan"
+        );
     }
 
     #[test]
@@ -320,8 +336,10 @@ mod tests {
 
     #[test]
     fn other_links_are_left_alone() {
-        assert_eq!(rewrite_links("[[other]] and [[plan]]", &to_work).as_deref(),
-            Some("[[other]] and [[work/plan]]"));
+        assert_eq!(
+            rewrite_links("[[other]] and [[plan]]", &to_work).as_deref(),
+            Some("[[other]] and [[work/plan]]")
+        );
     }
 
     #[test]
@@ -347,12 +365,19 @@ mod tests {
     }
 
     fn message(from: &str, to: &str, relinked: usize) -> String {
-        super::message(std::path::Path::new(from), std::path::Path::new(to), relinked)
+        super::message(
+            std::path::Path::new(from),
+            std::path::Path::new(to),
+            relinked,
+        )
     }
 
     #[test]
     fn a_rename_reads_as_a_rename() {
-        assert_eq!(message("a/plan.md", "a/roadmap.md", 0), "Renamed to roadmap.md");
+        assert_eq!(
+            message("a/plan.md", "a/roadmap.md", 0),
+            "Renamed to roadmap.md"
+        );
     }
 
     #[test]
@@ -362,13 +387,22 @@ mod tests {
 
     #[test]
     fn a_move_to_the_root_says_so() {
-        assert_eq!(message("a/plan.md", "plan.md", 0), "Moved plan.md to the vault root");
+        assert_eq!(
+            message("a/plan.md", "plan.md", 0),
+            "Moved plan.md to the vault root"
+        );
     }
 
     #[test]
     fn the_relink_count_is_appended_and_reads_singular_at_one() {
-        assert_eq!(message("a/plan.md", "a/roadmap.md", 1), "Renamed to roadmap.md, relinked 1 note");
-        assert_eq!(message("a/plan.md", "a/roadmap.md", 4), "Renamed to roadmap.md, relinked 4 notes");
+        assert_eq!(
+            message("a/plan.md", "a/roadmap.md", 1),
+            "Renamed to roadmap.md, relinked 1 note"
+        );
+        assert_eq!(
+            message("a/plan.md", "a/roadmap.md", 4),
+            "Renamed to roadmap.md, relinked 4 notes"
+        );
     }
 
     mod over_a_vault {
@@ -419,7 +453,10 @@ mod tests {
 
             // A bare stem still resolves after a change of folder, so nothing moved.
             assert!(rewritten.is_empty());
-            assert_eq!(text(&vault, "index.md"), "see [[plan]] and [[plan|the plan]]\n");
+            assert_eq!(
+                text(&vault, "index.md"),
+                "see [[plan]] and [[plan|the plan]]\n"
+            );
         }
 
         #[test]
@@ -559,4 +596,3 @@ mod tests {
         }
     }
 }
-

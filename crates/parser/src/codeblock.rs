@@ -101,7 +101,10 @@ thread_local! {
 
 /// Position in the shared set, which identifies a syntax where its name may not.
 fn syntax_id(syntax: &SyntaxReference) -> Option<usize> {
-    syntaxes().syntaxes().iter().position(|known| std::ptr::eq(known, syntax))
+    syntaxes()
+        .syntaxes()
+        .iter()
+        .position(|known| std::ptr::eq(known, syntax))
 }
 
 /// Run syntect's parser over `code`, one entry per line.
@@ -129,7 +132,14 @@ fn tokenize(syntax: &SyntaxReference, code: &str) -> Rc<Vec<LineOps>> {
         }
         let ops = Rc::new(parse(syntax, code));
         let weight = ops.iter().flatten().map(Vec::len).sum::<usize>();
-        cache.blocks.insert(key, Entry { used, weight, ops: Rc::clone(&ops) });
+        cache.blocks.insert(
+            key,
+            Entry {
+                used,
+                weight,
+                ops: Rc::clone(&ops),
+            },
+        );
         cache.weight += weight;
         while cache.weight > CACHE_OPS {
             let Some(oldest) = cache
@@ -163,7 +173,12 @@ impl<'a> BlockHighlighter<'a> {
     pub(crate) fn new(syntax: &SyntaxReference, theme: &'a Theme, code: &str) -> Self {
         let highlighter = Highlighter::new(theme);
         let state = HighlightState::new(&highlighter, ScopeStack::new());
-        Self { highlighter, state, ops: tokenize(syntax, code), line: 0 }
+        Self {
+            highlighter,
+            state,
+            ops: tokenize(syntax, code),
+            line: 0,
+        }
     }
 
     /// The colored runs of the next line, or `None` if it did not parse.
@@ -233,7 +248,10 @@ pub fn color_spans(src: &str, code: &Code) -> Vec<ColorSpan> {
                     continue;
                 }
                 // Adjacent same-color runs collapse into one span.
-                if let Some(ColorSpan { range: last, color: last_color }) = spans.last_mut()
+                if let Some(ColorSpan {
+                    range: last,
+                    color: last_color,
+                }) = spans.last_mut()
                     && last.end == range.start
                     && *last_color == color
                 {
@@ -292,7 +310,10 @@ fn fenced_blocks(src: &str) -> Vec<Fenced> {
         }
     }
     if let Some((_, _, language, content_start)) = open {
-        blocks.push(Fenced { language, content: content_start..src.len() });
+        blocks.push(Fenced {
+            language,
+            content: content_start..src.len(),
+        });
     }
     blocks.retain(|block| !block.language.is_empty());
     blocks
@@ -398,7 +419,11 @@ pub(super) mod tests {
     fn an_unclosed_fence_highlights_to_the_end() {
         let src = "```rust\n// typing away";
         let spans = color_spans(src, &palette());
-        assert!(colored(src, &spans, "#888888").concat().contains("// typing away"));
+        assert!(
+            colored(src, &spans, "#888888")
+                .concat()
+                .contains("// typing away")
+        );
     }
 
     #[test]
@@ -425,7 +450,11 @@ pub(super) mod tests {
     fn tilde_fences_and_info_extras_work() {
         let src = "~~~rust,ignore\n// tilde\n~~~\n";
         let spans = color_spans(src, &palette());
-        assert!(colored(src, &spans, "#888888").concat().contains("// tilde"));
+        assert!(
+            colored(src, &spans, "#888888")
+                .concat()
+                .contains("// tilde")
+        );
     }
 
     #[test]
@@ -458,15 +487,24 @@ pub(super) mod tests {
 
     /// Same text, same colors, but resolved from the palette it was given.
     fn recolored(src: &str) -> (Vec<ColorSpan>, Vec<ColorSpan>) {
-        (color_spans(src, &palette()), color_spans(src, &other_palette()))
+        (
+            color_spans(src, &palette()),
+            color_spans(src, &other_palette()),
+        )
     }
 
     #[test]
     fn a_second_palette_recolors_rather_than_reusing_the_first() {
         let src = "```rust\n// note\nlet x = 42;\n```\n";
         let (first, second) = recolored(src);
-        assert!(second.iter().any(|span| span.color == "#333333"), "{second:?}");
-        assert!(second.iter().all(|span| span.color != "#888888"), "{second:?}");
+        assert!(
+            second.iter().any(|span| span.color == "#333333"),
+            "{second:?}"
+        );
+        assert!(
+            second.iter().all(|span| span.color != "#888888"),
+            "{second:?}"
+        );
         let ranges: Vec<_> = first.iter().map(|span| span.range.clone()).collect();
         let same: Vec<_> = second.iter().map(|span| span.range.clone()).collect();
         assert_eq!(ranges, same);
@@ -489,7 +527,12 @@ pub(super) mod tests {
         drop(color_spans(src, &palette()));
         let after_editor = tokenizations();
         let no_links = |_: &str| None;
-        drop(crate::render(src, &other_palette(), &no_links, &crate::NoImages));
+        drop(crate::render(
+            src,
+            &other_palette(),
+            &no_links,
+            &crate::NoImages,
+        ));
         assert_eq!(tokenizations(), after_editor);
     }
 
@@ -502,12 +545,15 @@ pub(super) mod tests {
 
     #[test]
     fn the_cache_drops_the_oldest_block_rather_than_growing() {
-        let block = |n: usize| {
-            format!("```rust\nlet value_{n} = first(1) + second(2) * third(3);\n```\n")
-        };
+        let block =
+            |n: usize| format!("```rust\nlet value_{n} = first(1) + second(2) * third(3);\n```\n");
         for n in 0..200 {
             drop(color_spans(&block(n), &palette()));
-            assert!(super::cached_ops() <= super::CACHE_OPS, "{} ops held", super::cached_ops());
+            assert!(
+                super::cached_ops() <= super::CACHE_OPS,
+                "{} ops held",
+                super::cached_ops()
+            );
         }
 
         let before = tokenizations();
@@ -517,7 +563,6 @@ pub(super) mod tests {
         assert_eq!(tokenizations(), before + 1, "the oldest block was kept");
     }
 }
-
 
 #[cfg(test)]
 mod vault_languages {
@@ -529,8 +574,8 @@ mod vault_languages {
     #[test]
     fn the_common_fence_tokens_resolve() {
         for token in [
-            "kotlin", "kt", "csharp", "c#", "cs", "bash", "sh", "shell", "json", "xml",
-            "python", "sql", "yaml", "js", "rust", "gradle",
+            "kotlin", "kt", "csharp", "c#", "cs", "bash", "sh", "shell", "json", "xml", "python",
+            "sql", "yaml", "js", "rust", "gradle",
         ] {
             assert!(lookup(token).is_some(), "{token} does not resolve");
         }
@@ -594,4 +639,3 @@ mod vault_languages {
         }));
     }
 }
-

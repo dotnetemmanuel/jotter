@@ -231,7 +231,10 @@ mod tests {
 
     #[test]
     fn steps_that_did_nothing_are_not_mentioned() {
-        assert_eq!(sync_summary(&report(2, 0, 1)), "Committed 2 notes, pushed 1");
+        assert_eq!(
+            sync_summary(&report(2, 0, 1)),
+            "Committed 2 notes, pushed 1"
+        );
     }
 
     #[test]

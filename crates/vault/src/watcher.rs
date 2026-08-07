@@ -7,9 +7,7 @@ use std::time::Duration;
 use notify::EventKind;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{RecommendedWatcher, RecursiveMode};
-use notify_debouncer_full::{
-    DebounceEventResult, Debouncer, RecommendedCache, new_debouncer,
-};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 
 use crate::error::VaultError;
 use crate::ignore::is_ignored_path;
@@ -94,7 +92,12 @@ pub fn watch_with_debounce(
     let mut debouncer = new_debouncer(debounce, None, handler)?;
     debouncer.watch(&watch_root, RecursiveMode::Recursive)?;
 
-    Ok((rx, WatchGuard { _debouncer: debouncer }))
+    Ok((
+        rx,
+        WatchGuard {
+            _debouncer: debouncer,
+        },
+    ))
 }
 
 /// Turns one debounced event into zero or more vault-relative changes.
@@ -117,11 +120,7 @@ fn translate(root: &Path, event: &notify::Event) -> Vec<VaultChange> {
 }
 
 /// Builds one change from the last path of the event, if it survives the filter.
-fn single(
-    root: &Path,
-    paths: &[PathBuf],
-    make: fn(PathBuf) -> VaultChange,
-) -> Vec<VaultChange> {
+fn single(root: &Path, paths: &[PathBuf], make: fn(PathBuf) -> VaultChange) -> Vec<VaultChange> {
     paths
         .last()
         .and_then(|abs| relativize_kept(root, abs))

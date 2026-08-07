@@ -49,7 +49,12 @@ impl Repo {
     /// # Errors
     /// [`GitError::Io`] if the note cannot be written, or [`GitError::Command`]
     /// if git will not stage it.
-    pub fn write_resolved(&self, path: &str, spans: &[Span], choices: &[Choice]) -> Result<(), GitError> {
+    pub fn write_resolved(
+        &self,
+        path: &str,
+        spans: &[Span],
+        choices: &[Choice],
+    ) -> Result<(), GitError> {
         std::fs::write(self.note_path(path), conflict::apply(spans, choices))?;
         if choices.iter().any(Choice::is_unresolved) || choices.len() < conflict::count(spans) {
             return Ok(());
@@ -68,10 +73,7 @@ impl Repo {
     /// [`GitError::Command`] with git's own message if the path is not conflicted
     /// or the checkout fails.
     pub fn resolve(&self, path: &str, side: Side) -> Result<(), GitError> {
-        git(
-            self.root(),
-            &["checkout", side.checkout_flag(), "--", path],
-        )?;
+        git(self.root(), &["checkout", side.checkout_flag(), "--", path])?;
         self.mark_resolved(path)
     }
 

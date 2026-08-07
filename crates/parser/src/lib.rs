@@ -102,7 +102,9 @@ pub fn render(
 
     let headings = collect_headings(root);
 
-    let adapter = CodeAdapter { theme: theme_from_code(code) };
+    let adapter = CodeAdapter {
+        theme: theme_from_code(code),
+    };
     let mut plugins = comrak::options::Plugins::default();
     plugins.render.codefence_syntax_highlighter = Some(&adapter);
 
@@ -374,7 +376,10 @@ fn escape_html(text: &str) -> String {
 /// Build a syntect [`Theme`] from the jotter code palette, mapping scopes to
 /// palette colors. Malformed hex falls back to a neutral default.
 pub(crate) fn theme_from_code(code: &Code) -> Theme {
-    let mut theme = Theme { name: Some("jotter".to_string()), ..Theme::default() };
+    let mut theme = Theme {
+        name: Some("jotter".to_string()),
+        ..Theme::default()
+    };
     theme.settings.background = Some(parse_hex(&code.background));
     theme.settings.foreground = Some(parse_hex(&code.foreground));
 
@@ -389,7 +394,10 @@ pub(crate) fn theme_from_code(code: &Code) -> Theme {
         ("string", code.string.as_str()),
         ("constant.character.escape", code.number.as_str()),
         ("comment", code.comment.as_str()),
-        ("entity.name.function, variable.function, support.function", code.function.as_str()),
+        (
+            "entity.name.function, variable.function, support.function",
+            code.function.as_str(),
+        ),
         ("constant.numeric, constant.language", code.number.as_str()),
         (
             "entity.name.type, entity.name.class, storage.type, support.type, support.class",
@@ -453,40 +461,65 @@ mod image_paths {
     use std::path::Path;
 
     fn at(url: &str) -> Option<String> {
-        absolute_file_uri(url, &super::RelativeTo(Path::new("/vault/notes").to_path_buf()))
+        absolute_file_uri(
+            url,
+            &super::RelativeTo(Path::new("/vault/notes").to_path_buf()),
+        )
     }
 
     #[test]
     fn a_same_folder_image_becomes_absolute() {
-        assert_eq!(at("beside.jpg").as_deref(), Some("file:///vault/notes/beside.jpg"));
+        assert_eq!(
+            at("beside.jpg").as_deref(),
+            Some("file:///vault/notes/beside.jpg")
+        );
     }
 
     #[test]
     fn a_subfolder_image_keeps_its_subfolder() {
-        assert_eq!(at("pics/otter.jpg").as_deref(), Some("file:///vault/notes/pics/otter.jpg"));
+        assert_eq!(
+            at("pics/otter.jpg").as_deref(),
+            Some("file:///vault/notes/pics/otter.jpg")
+        );
     }
 
     #[test]
     fn a_parent_relative_image_resolves_upward() {
-        assert_eq!(at("../top.png").as_deref(), Some("file:///vault/notes/../top.png"));
+        assert_eq!(
+            at("../top.png").as_deref(),
+            Some("file:///vault/notes/../top.png")
+        );
     }
 
     #[test]
     fn an_absolute_path_replaces_the_base() {
-        assert_eq!(at("/srv/shared/x.png").as_deref(), Some("file:///srv/shared/x.png"));
+        assert_eq!(
+            at("/srv/shared/x.png").as_deref(),
+            Some("file:///srv/shared/x.png")
+        );
     }
 
     #[test]
     fn remote_and_data_urls_are_left_alone() {
-        for url in ["https://example.com/a.png", "http://x/a.png", "data:image/png;base64,AAA"] {
+        for url in [
+            "https://example.com/a.png",
+            "http://x/a.png",
+            "data:image/png;base64,AAA",
+        ] {
             assert_eq!(at(url), None, "{url} should be untouched");
         }
     }
 
     #[test]
     fn spaces_and_specials_are_percent_encoded() {
-        assert_eq!(at("my pic.jpg").as_deref(), Some("file:///vault/notes/my%20pic.jpg"));
-        assert_eq!(at("caf\u{e9}.png").as_deref(), Some("file:///vault/notes/caf%C3%A9.png"));
+        assert_eq!(
+            at("my pic.jpg").as_deref(),
+            Some("file:///vault/notes/my%20pic.jpg")
+        );
+        assert_eq!(
+            at("caf\u{e9}.png").as_deref(),
+            Some("file:///vault/notes/caf%C3%A9.png")
+        );
     }
 
     #[test]
@@ -509,7 +542,10 @@ mod html_image_paths {
     use std::path::Path;
 
     fn at(html: &str) -> Option<String> {
-        rewrite_html_srcs(html, &super::RelativeTo(Path::new("/vault/CV").to_path_buf()))
+        rewrite_html_srcs(
+            html,
+            &super::RelativeTo(Path::new("/vault/CV").to_path_buf()),
+        )
     }
 
     #[test]
@@ -524,8 +560,16 @@ mod html_image_paths {
 
     #[test]
     fn single_quoted_and_unquoted_srcs_work() {
-        assert!(at("<img src='a.png'>").unwrap().contains("file:///vault/CV/a.png"));
-        assert!(at("<img src=a.png>").unwrap().contains("file:///vault/CV/a.png"));
+        assert!(
+            at("<img src='a.png'>")
+                .unwrap()
+                .contains("file:///vault/CV/a.png")
+        );
+        assert!(
+            at("<img src=a.png>")
+                .unwrap()
+                .contains("file:///vault/CV/a.png")
+        );
     }
 
     #[test]

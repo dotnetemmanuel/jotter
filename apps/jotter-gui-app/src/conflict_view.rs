@@ -86,7 +86,11 @@ impl Pane {
         root.set_hexpand(true);
         root.append(&label);
         root.append(&scroller);
-        Self { root, title: label, body }
+        Self {
+            root,
+            title: label,
+            body,
+        }
     }
 
     fn set_text(&self, text: &str) {
@@ -213,7 +217,12 @@ impl View {
     }
 
     /// Hangs a choice off a button.
-    fn wire(self: &Rc<Self>, button: &gtk::Button, choice: Choice, on_request: &Rc<impl Fn(Request) + 'static>) {
+    fn wire(
+        self: &Rc<Self>,
+        button: &gtk::Button,
+        choice: Choice,
+        on_request: &Rc<impl Fn(Request) + 'static>,
+    ) {
         let view = Rc::clone(self);
         let on_request = Rc::clone(on_request);
         button.connect_clicked(move |_| {
@@ -235,7 +244,11 @@ impl View {
             (old.file, old.block)
         };
         let mut model = model;
-        if model.files.get(file).is_some_and(|held| block < held.blocks()) {
+        if model
+            .files
+            .get(file)
+            .is_some_and(|held| block < held.blocks())
+        {
             model.file = file;
             model.block = block;
         }
@@ -256,7 +269,8 @@ impl View {
         for (button, label) in &self.actions {
             button.set_label(&crate::style::button(style, label));
         }
-        self.incoming.set_title(&crate::style::heading(style, "Incoming"));
+        self.incoming
+            .set_title(&crate::style::heading(style, "Incoming"));
         self.yours.set_title(&crate::style::heading(style, "Yours"));
         self.redraw();
     }
@@ -360,7 +374,8 @@ impl View {
             Choice::Unresolved => "Resolution",
             _ => "Resolution \u{2713}",
         };
-        self.resolution.set_title(&crate::style::heading(self.style.get(), title));
+        self.resolution
+            .set_title(&crate::style::heading(self.style.get(), title));
         if self.editing.get() {
             return;
         }
@@ -465,7 +480,9 @@ impl View {
         let Some(focused) = gtk::prelude::GtkWindowExt::focus(&window) else {
             return false;
         };
-        if focused.is_ancestor(&self.resolution.body) || focused == self.resolution.body.clone().upcast::<gtk::Widget>() {
+        if focused.is_ancestor(&self.resolution.body)
+            || focused == self.resolution.body.clone().upcast::<gtk::Widget>()
+        {
             return false;
         }
         focused.is::<gtk::Entry>() || focused.is::<gtk::TextView>() || focused.is::<gtk::Text>()
@@ -477,7 +494,9 @@ impl View {
         self.root.connect_map(move |root| view.reflow(root.width()));
         let view = Rc::clone(self);
         self.root
-            .connect_notify_local(Some("width-request"), move |root, _| view.reflow(root.width()));
+            .connect_notify_local(Some("width-request"), move |root, _| {
+                view.reflow(root.width());
+            });
 
         let view = Rc::clone(self);
         let resize = gtk::EventControllerMotion::new();
@@ -529,15 +548,13 @@ fn lines(lines: &[String]) -> String {
 /// What the resolution pane shows for a choice.
 fn resolution_text(region: &Region, choice: &Choice) -> String {
     match choice {
-        Choice::Unresolved => {
-            "Not resolved yet.\n\n\
+        Choice::Unresolved => "Not resolved yet.\n\n\
              a  take incoming\n\
              d  take yours\n\
              b  take both\n\
              e  edit by hand\n\n\
              n and N step through the conflicts, [ and ] jump between notes."
-                .to_string()
-        }
+            .to_string(),
         Choice::Incoming => lines(&region.incoming),
         Choice::Yours => lines(&region.yours),
         Choice::Both => both_sides(region),
@@ -582,10 +599,7 @@ mod tests {
 
     #[test]
     fn an_answered_block_shows_what_was_chosen() {
-        assert_eq!(
-            resolution_text(&region(), &Choice::Yours),
-            "what I wrote\n"
-        );
+        assert_eq!(resolution_text(&region(), &Choice::Yours), "what I wrote\n");
         assert_eq!(
             resolution_text(&region(), &Choice::Custom("mine, edited".to_string())),
             "mine, edited"

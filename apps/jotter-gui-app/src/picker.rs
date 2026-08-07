@@ -56,7 +56,10 @@ pub struct Row {
 /// user types (the switcher turning into the palette) keeps an honest
 /// heading. `activate` receives the key of the chosen row, `on_close` runs
 /// after the panel goes away either way, so callers can restore focus.
-#[allow(clippy::too_many_arguments, reason = "each argument is a distinct collaborator, not a bundle waiting to happen")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct collaborator, not a bundle waiting to happen"
+)]
 pub fn open<T, S, A, C>(
     overlay: &gtk::Overlay,
     style: Style,
@@ -422,7 +425,11 @@ fn marked(label: &str, positions: &[usize], color: Option<&str>) -> String {
 }
 
 fn close_tag(color: Option<&str>) -> &'static str {
-    if color.is_some() { "</span></b>" } else { "</b>" }
+    if color.is_some() {
+        "</span></b>"
+    } else {
+        "</b>"
+    }
 }
 
 #[cfg(test)]
@@ -515,4 +522,3 @@ mod tests {
         assert_eq!(highlight("café", &[3]), "caf<b>é</b>");
     }
 }
-

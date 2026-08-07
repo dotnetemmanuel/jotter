@@ -62,12 +62,18 @@ mod tests {
 
     #[test]
     fn a_saved_note_is_named_plainly() {
-        assert_eq!(window_title(Some("phase3-plan"), false), "phase3-plan - jotter");
+        assert_eq!(
+            window_title(Some("phase3-plan"), false),
+            "phase3-plan - jotter"
+        );
     }
 
     #[test]
     fn unsaved_edits_get_a_marker() {
-        assert_eq!(window_title(Some("phase3-plan"), true), "\u{2022} phase3-plan - jotter");
+        assert_eq!(
+            window_title(Some("phase3-plan"), true),
+            "\u{2022} phase3-plan - jotter"
+        );
     }
 
     #[test]
@@ -99,10 +105,7 @@ mod tests {
     #[test]
     fn filename_stem_is_last_resort() {
         let text = "no heading here, just prose";
-        assert_eq!(
-            extract_title(text, Path::new("sub/My File.md")),
-            "My File"
-        );
+        assert_eq!(extract_title(text, Path::new("sub/My File.md")), "My File");
     }
 
     #[test]

@@ -48,9 +48,7 @@ fn set_upstream(repo: &Repository, oid: Oid) {
     }
     repo.reference("refs/remotes/origin/main", oid, true, "test")
         .unwrap();
-    let mut branch = repo
-        .find_branch("main", git2::BranchType::Local)
-        .unwrap();
+    let mut branch = repo.find_branch("main", git2::BranchType::Local).unwrap();
     branch.set_upstream(Some("origin/main")).unwrap();
 }
 

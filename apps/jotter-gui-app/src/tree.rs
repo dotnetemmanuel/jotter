@@ -149,7 +149,10 @@ pub fn child_store(root: &Path, rel: &str) -> Option<gio::ListStore> {
 /// the root. Empty falls back to the string as-is.
 #[must_use]
 pub fn label_for(rel: &str) -> &str {
-    rel.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(rel)
+    rel.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(rel)
 }
 
 #[cfg(test)]
@@ -159,20 +162,21 @@ mod tests {
     use tempfile::TempDir;
 
     fn dir(name: &str) -> Entry {
-        Entry { name: name.into(), kind: Kind::Dir }
+        Entry {
+            name: name.into(),
+            kind: Kind::Dir,
+        }
     }
     fn file(name: &str) -> Entry {
-        Entry { name: name.into(), kind: Kind::Note }
+        Entry {
+            name: name.into(),
+            kind: Kind::Note,
+        }
     }
 
     #[test]
     fn folders_sort_before_files_then_alpha() {
-        let mut entries = vec![
-            file("zeta.md"),
-            dir("beta"),
-            file("alpha.md"),
-            dir("Alpha"),
-        ];
+        let mut entries = vec![file("zeta.md"), dir("beta"), file("alpha.md"), dir("Alpha")];
         sort_entries(&mut entries);
         assert_eq!(
             entries,
@@ -208,10 +212,19 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                Entry { name: "sub".into(), kind: Kind::Dir },
-                Entry { name: "keep.md".into(), kind: Kind::Note },
+                Entry {
+                    name: "sub".into(),
+                    kind: Kind::Dir
+                },
+                Entry {
+                    name: "keep.md".into(),
+                    kind: Kind::Note
+                },
                 // Listed, not hidden: a folder of PDFs must not look empty.
-                Entry { name: "skip.txt".into(), kind: Kind::Other },
+                Entry {
+                    name: "skip.txt".into(),
+                    kind: Kind::Other
+                },
             ]
         );
     }

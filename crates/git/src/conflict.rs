@@ -284,7 +284,10 @@ tail
 
     #[test]
     fn taking_the_incoming_side_keeps_only_it() {
-        assert_eq!(resolved(Choice::Incoming), "# Note\n\nfrom the remote\n\ntail\n");
+        assert_eq!(
+            resolved(Choice::Incoming),
+            "# Note\n\nfrom the remote\n\ntail\n"
+        );
     }
 
     #[test]

@@ -84,6 +84,8 @@ impl Handle {
 }
 
 /// Opens the settings window over `parent`, reporting changes as they happen.
+// Crossed 100 lines only when rustfmt rewrapped it; the body did not grow.
+#[allow(clippy::too_many_lines)]
 pub fn open<F: Fn(Change) + 'static>(
     parent: &gtk::Window,
     themes: &[String],
@@ -102,8 +104,14 @@ pub fn open<F: Fn(Change) + 'static>(
     let (themes_row, theme_picker) =
         theme_buttons(themes, current_theme, &mode_now, &swatches, &on_change);
 
-    let (modes, light, dark) =
-        mode_buttons(current.style, current_mode, &mode_now, &swatches, &quiet, &on_change);
+    let (modes, light, dark) = mode_buttons(
+        current.style,
+        current_mode,
+        &mode_now,
+        &swatches,
+        &quiet,
+        &on_change,
+    );
     let (styles, classic, tui) = style_buttons(current.style, &quiet, &on_change);
 
     let grid = gtk::Grid::builder()
@@ -316,7 +324,10 @@ fn style_sync(
     let tui = tui.clone();
     let quiet = Rc::clone(quiet);
     let mut faces: Vec<(gtk::Button, String)> = vec![
-        (classic.clone().upcast::<gtk::Button>(), "Classic".to_string()),
+        (
+            classic.clone().upcast::<gtk::Button>(),
+            "Classic".to_string(),
+        ),
         (tui.clone().upcast::<gtk::Button>(), "TUI".to_string()),
         (light.clone().upcast::<gtk::Button>(), "Light".to_string()),
         (dark.clone().upcast::<gtk::Button>(), "Dark".to_string()),
@@ -408,8 +419,14 @@ fn theme_buttons(
         let button = gtk::ToggleButton::new();
         let face = gtk::Box::new(Orientation::Vertical, 4);
         if let Ok(file) = crate::themes::load(id) {
-            let dark = file.resolve(Mode::Dark).map(|theme| bars(&theme)).unwrap_or_default();
-            let light = file.resolve(Mode::Light).map(|theme| bars(&theme)).unwrap_or_default();
+            let dark = file
+                .resolve(Mode::Dark)
+                .map(|theme| bars(&theme))
+                .unwrap_or_default();
+            let light = file
+                .resolve(Mode::Light)
+                .map(|theme| bars(&theme))
+                .unwrap_or_default();
             let area = swatch(dark, light, mode);
             swatches.borrow_mut().push(area.clone());
             face.append(&area);
@@ -477,7 +494,9 @@ fn size_row(
         }
         row.append(&button);
     }
-    row.append(&gtk::Label::new(Some("shared by the editor and the preview")));
+    row.append(&gtk::Label::new(Some(
+        "shared by the editor and the preview",
+    )));
 
     grid.attach(&row_label("Font size"), 0, 3, 1, 1);
     grid.attach(&row, 1, 3, 1, 1);
@@ -491,16 +510,24 @@ fn attach_font_rows(
     on_change: &Rc<impl Fn(Change) + 'static>,
 ) {
     let picked = Rc::clone(on_change);
-    let editor = font_row(&crate::fonts::families(true), &current.editor_font, move |name| {
-        picked(Change::EditorFont(name));
-    });
+    let editor = font_row(
+        &crate::fonts::families(true),
+        &current.editor_font,
+        move |name| {
+            picked(Change::EditorFont(name));
+        },
+    );
     grid.attach(&row_label("Editor font"), 0, 4, 1, 1);
     grid.attach(&editor, 1, 4, 1, 1);
 
     let picked = Rc::clone(on_change);
-    let preview = font_row(&crate::fonts::families(false), &current.preview_font, move |name| {
-        picked(Change::PreviewFont(name));
-    });
+    let preview = font_row(
+        &crate::fonts::families(false),
+        &current.preview_font,
+        move |name| {
+            picked(Change::PreviewFont(name));
+        },
+    );
     grid.attach(&row_label("Preview font"), 0, 5, 1, 1);
     grid.attach(&preview, 1, 5, 1, 1);
 }

@@ -70,7 +70,9 @@ fn id_in(path: &Path) -> Option<String> {
 /// # Errors
 /// Returns a [`jotter_theming::ThemeError`] if the file will not parse.
 pub fn load(id: &str) -> Result<ThemeFile, jotter_theming::ThemeError> {
-    if let Some(entry) = user_themes(&user_dir()).into_iter().find(|entry| entry.id == id)
+    if let Some(entry) = user_themes(&user_dir())
+        .into_iter()
+        .find(|entry| entry.id == id)
         && let Some(path) = entry.path
         && let Ok(text) = std::fs::read_to_string(&path)
     {
@@ -112,9 +114,10 @@ mod tests {
     #[test]
     fn a_user_theme_is_found_by_the_id_inside_it() {
         let tmp = TempDir::new().unwrap();
-        let source = jotter_theming::bundled::BUNDLED[0]
-            .source
-            .replacen("\"retro82\"", "\"mine\"", 1);
+        let source =
+            jotter_theming::bundled::BUNDLED[0]
+                .source
+                .replacen("\"retro82\"", "\"mine\"", 1);
         std::fs::write(tmp.path().join("whatever-the-file-is-called.json"), source).unwrap();
 
         let found = user_themes(tmp.path());

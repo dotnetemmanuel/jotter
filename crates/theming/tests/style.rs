@@ -188,24 +188,57 @@ fn the_tui_sheet_sets_the_ui_font_the_theme_was_given() {
 fn the_classic_sheet_is_untouched_by_the_new_arm() {
     let theme = tui("retro82", Mode::Dark).with_style(Style::Classic);
     let css = theme.to_gtk_css();
-    assert!(css.contains("border-radius: 3px"), "classic keeps its corners");
+    assert!(
+        css.contains("border-radius: 3px"),
+        "classic keeps its corners"
+    );
 }
 
 #[test]
 fn the_tui_sheet_dresses_every_widget_class_the_app_uses() {
     let css = tui("retro82", Mode::Dark).to_gtk_css();
     for class in [
-        ".rail", ".rail-button", ".font-list", ".settings", ".settings-label",
-        ".settings-close", ".keysheet-heading", ".keysheet-keys", ".theme-button",
-        ".theme-name", ".conflict", ".conflict-header", ".conflict-title",
-        ".conflict-body", ".conflict-actions", ".status-size", ".status-git",
-        ".status-broken", ".status-joiner", ".backlinks", ".backlinks-header", ".search-results",
-        ".panel-back", ".tags-heading", ".tag-row", ".search-heading",
-        ".search-name", ".search-folder", ".search-count", ".search-snippet",
-        ".completion", ".picker", ".picker-detail", ".panel-bar", ".picker-title",
+        ".rail",
+        ".rail-button",
+        ".font-list",
+        ".settings",
+        ".settings-label",
+        ".settings-close",
+        ".keysheet-heading",
+        ".keysheet-keys",
+        ".theme-button",
+        ".theme-name",
+        ".conflict",
+        ".conflict-header",
+        ".conflict-title",
+        ".conflict-body",
+        ".conflict-actions",
+        ".status-size",
+        ".status-git",
+        ".status-broken",
+        ".status-joiner",
+        ".backlinks",
+        ".backlinks-header",
+        ".search-results",
+        ".panel-back",
+        ".tags-heading",
+        ".tag-row",
+        ".search-heading",
+        ".search-name",
+        ".search-folder",
+        ".search-count",
+        ".search-snippet",
+        ".completion",
+        ".picker",
+        ".picker-detail",
+        ".panel-bar",
+        ".picker-title",
         ".row-cursor",
     ] {
-        assert!(css.contains(class), "the TUI sheet says nothing about {class}");
+        assert!(
+            css.contains(class),
+            "the TUI sheet says nothing about {class}"
+        );
     }
 }
 

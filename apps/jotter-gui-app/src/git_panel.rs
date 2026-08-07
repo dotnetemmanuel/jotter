@@ -158,7 +158,8 @@ impl Panel {
 
     /// Sets the heading label styled for the active dress, and remembers it unstyled.
     fn write_heading(&self, text: String) {
-        self.heading.set_text(&crate::style::heading(self.style.get(), &text));
+        self.heading
+            .set_text(&crate::style::heading(self.style.get(), &text));
         *self.last_heading.borrow_mut() = text;
     }
 }

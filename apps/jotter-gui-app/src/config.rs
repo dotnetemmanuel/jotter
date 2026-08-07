@@ -118,7 +118,6 @@ impl Config {
         self.recent_vaults = push_recent(std::mem::take(&mut self.recent_vaults), key);
     }
 
-
     /// Records `rel` as the last-active note for vault `root`.
     pub fn set_last_active(&mut self, root: &Path, rel: &Path) {
         let key = root.to_string_lossy().into_owned();
@@ -211,7 +210,7 @@ fn capped(existing: Vec<String>, key: String, cap: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, MAX_RECENTS, MAX_RECENT_NOTES, push_recent};
+    use super::{Config, MAX_RECENT_NOTES, MAX_RECENTS, push_recent};
     use std::collections::HashSet;
     use std::path::Path;
 
@@ -220,7 +219,10 @@ mod tests {
         let mut config = Config::default();
         config.push_recent_note(Path::new("/vault"), Path::new("a.md"));
         config.push_recent_note(Path::new("/vault"), Path::new("b.md"));
-        assert_eq!(config.recent_notes_for(Path::new("/vault")), ["b.md", "a.md"]);
+        assert_eq!(
+            config.recent_notes_for(Path::new("/vault")),
+            ["b.md", "a.md"]
+        );
     }
 
     #[test]
@@ -229,7 +231,10 @@ mod tests {
         for name in ["a.md", "b.md", "a.md"] {
             config.push_recent_note(Path::new("/vault"), Path::new(name));
         }
-        assert_eq!(config.recent_notes_for(Path::new("/vault")), ["a.md", "b.md"]);
+        assert_eq!(
+            config.recent_notes_for(Path::new("/vault")),
+            ["a.md", "b.md"]
+        );
     }
 
     #[test]

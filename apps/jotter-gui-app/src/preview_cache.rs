@@ -40,7 +40,11 @@ mod tests {
     use super::{HeadingAnchor, LoadedPage, is_current};
 
     fn page(text: &str, generation: u64) -> LoadedPage {
-        LoadedPage { text: text.to_owned(), generation, headings: Vec::new() }
+        LoadedPage {
+            text: text.to_owned(),
+            generation,
+            headings: Vec::new(),
+        }
     }
 
     #[test]
@@ -81,7 +85,10 @@ mod tests {
             anchor: "hi".to_owned(),
             level: 1,
         });
-        assert_eq!(super::reusable(Some(&loaded), "# hi", 3).map(<[_]>::len), Some(1));
+        assert_eq!(
+            super::reusable(Some(&loaded), "# hi", 3).map(<[_]>::len),
+            Some(1)
+        );
         assert!(super::reusable(Some(&loaded), "# hi", 4).is_none());
         assert!(super::reusable(Some(&loaded), "# bye", 3).is_none());
         assert!(super::reusable(None, "# hi", 3).is_none());

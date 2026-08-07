@@ -166,7 +166,11 @@ fn a_hand_edited_note_is_marked_resolved_as_it_stands() {
     let world = conflicted();
     let repo = Repo::discover(&world.vault).unwrap();
 
-    write(&world.vault, "note.md", "# Note\n\nMINE and THEIRS, merged by hand\n");
+    write(
+        &world.vault,
+        "note.md",
+        "# Note\n\nMINE and THEIRS, merged by hand\n",
+    );
     repo.mark_resolved("note.md").unwrap();
     repo.continue_rebase().unwrap();
 
@@ -215,7 +219,8 @@ fn answering_every_block_writes_and_stages_the_note() {
     let repo = Repo::discover(&world.vault).unwrap();
     let spans = repo.conflict_spans("note.md").unwrap();
 
-    repo.write_resolved("note.md", &spans, &[Choice::Both]).unwrap();
+    repo.write_resolved("note.md", &spans, &[Choice::Both])
+        .unwrap();
 
     let text = read(&world.vault, "note.md");
     assert!(text.contains("THEIRS"), "incoming side missing: {text}");
@@ -233,7 +238,8 @@ fn a_note_with_a_block_still_open_is_written_but_not_staged() {
     let repo = Repo::discover(&world.vault).unwrap();
     let spans = repo.conflict_spans("note.md").unwrap();
 
-    repo.write_resolved("note.md", &spans, &[Choice::Unresolved]).unwrap();
+    repo.write_resolved("note.md", &spans, &[Choice::Unresolved])
+        .unwrap();
 
     // Still conflicted as far as git is concerned, so continuing is refused.
     assert_eq!(repo.conflict_state(), Some(vec!["note.md".to_string()]));

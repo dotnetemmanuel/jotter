@@ -132,7 +132,10 @@ impl Popup {
                 .label(crate::picker::highlight(&row.label, &row.positions))
                 .build();
             // Not focusable: a click must leave the caret in the editor.
-            let holder = gtk::ListBoxRow::builder().can_focus(false).child(&label).build();
+            let holder = gtk::ListBoxRow::builder()
+                .can_focus(false)
+                .child(&label)
+                .build();
             self.list.append(&holder);
         }
         *self.keys.borrow_mut() = rows.iter().map(|row| row.key.clone()).collect();
@@ -265,7 +268,10 @@ mod tests {
 
     #[test]
     fn a_second_link_completes_after_a_finished_one() {
-        assert_eq!(query_at("see [[plan]] and [[gr", 21), Some("gr".to_string()));
+        assert_eq!(
+            query_at("see [[plan]] and [[gr", 21),
+            Some("gr".to_string())
+        );
     }
 
     #[test]

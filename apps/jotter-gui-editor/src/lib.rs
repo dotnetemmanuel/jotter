@@ -220,7 +220,8 @@ impl Editor {
         tagged.sort_by_key(|(range, _)| range.start);
 
         for (range, tag) in tagged {
-            let (Some(from), Some(to)) = (lines.locate(range.start), lines.locate(range.end)) else {
+            let (Some(from), Some(to)) = (lines.locate(range.start), lines.locate(range.end))
+            else {
                 continue;
             };
             let (Some(from), Some(to)) = (
@@ -243,7 +244,6 @@ impl Editor {
         );
     }
 
-
     /// Color the fenced code blocks, replacing whatever colors were there.
     ///
     /// Each span carries a `#rrggbb` from the theme code palette; a tag per color
@@ -264,7 +264,8 @@ impl Editor {
                 self.buffer.tag_table().add(&tag);
                 tag
             });
-            let (Some(from), Some(to)) = (lines.locate(range.start), lines.locate(range.end)) else {
+            let (Some(from), Some(to)) = (lines.locate(range.start), lines.locate(range.end))
+            else {
                 continue;
             };
             let (Some(from), Some(to)) = (
@@ -359,7 +360,8 @@ impl Editor {
     pub fn set_theme(&self, theme: &Theme) {
         register_and_apply_scheme(&self.buffer, theme);
         apply_font(&self.font_provider, theme);
-        self.link_tag.set_foreground(Some(&theme.editor.syntax.link));
+        self.link_tag
+            .set_foreground(Some(&theme.editor.syntax.link));
         self.broken_link_tag
             .set_foreground(Some(&theme.preview.muted));
         self.inert_tag
@@ -380,7 +382,9 @@ impl Editor {
     #[must_use]
     pub fn caret_byte(&self) -> usize {
         let iter = self.buffer.iter_at_mark(&self.buffer.get_insert());
-        self.buffer.text(&self.buffer.start_iter(), &iter, true).len()
+        self.buffer
+            .text(&self.buffer.start_iter(), &iter, true)
+            .len()
     }
 
     /// Replace the buffer bytes in `range` with `text`, then put the caret
@@ -404,11 +408,9 @@ impl Editor {
     pub fn caret_rect(&self) -> gtk::gdk::Rectangle {
         let iter = self.buffer.iter_at_mark(&self.buffer.get_insert());
         let strong = self.view.cursor_locations(Some(&iter)).0;
-        let (x, y) = self.view.buffer_to_window_coords(
-            gtk::TextWindowType::Widget,
-            strong.x(),
-            strong.y(),
-        );
+        let (x, y) =
+            self.view
+                .buffer_to_window_coords(gtk::TextWindowType::Widget, strong.x(), strong.y());
         gtk::gdk::Rectangle::new(x, y, strong.width(), strong.height())
     }
 
@@ -420,8 +422,7 @@ impl Editor {
 
     /// Run `f` whenever the caret moves, including moves caused by editing.
     pub fn connect_caret_moved<F: Fn() + 'static>(&self, f: F) {
-        self.buffer
-            .connect_cursor_position_notify(move |_| f());
+        self.buffer.connect_cursor_position_notify(move |_| f());
     }
 
     /// Intercept a key press before the view handles it; `f` returns true to consume.

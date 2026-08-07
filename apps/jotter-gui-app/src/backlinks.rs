@@ -104,8 +104,10 @@ impl Strip {
         let count = self.results.len();
         let showing = self.wanted.get() && count > 0;
         self.revealer.set_reveal_child(showing);
-        self.header
-            .set_label(&crate::style::heading(self.style.get(), &header_text(count, showing)));
+        self.header.set_label(&crate::style::heading(
+            self.style.get(),
+            &header_text(count, showing),
+        ));
     }
 
     /// Recolors the matched words after a theme change.
@@ -159,7 +161,10 @@ pub fn linking_lines(
         let indent = raw.len() - raw.trim_start().len();
         let span = link.range.start - starts[line] - indent..link.range.end - starts[line] - indent;
 
-        if let Some(existing) = found.iter_mut().find(|found| found.line == line_number(line)) {
+        if let Some(existing) = found
+            .iter_mut()
+            .find(|found| found.line == line_number(line))
+        {
             existing.spans.push(span);
             continue;
         }
@@ -225,7 +230,10 @@ mod tests {
     #[test]
     fn the_line_holding_the_link_is_returned() {
         let text = "intro\nsee [[plan]] for details\ntail";
-        assert_eq!(lines(text, 5), [(1, "see [[plan]] for details".to_string())]);
+        assert_eq!(
+            lines(text, 5),
+            [(1, "see [[plan]] for details".to_string())]
+        );
     }
 
     #[test]

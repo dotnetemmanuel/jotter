@@ -113,7 +113,10 @@ mod tests {
         let tmp = vault();
         let seen = RefCell::new(HashMap::new());
         let locator = Locator::new(Some(tmp.path().to_path_buf()), Some(tmp.path()), &seen);
-        assert_eq!(locator.locate("github.png"), Some(tmp.path().join("images/github.png")));
+        assert_eq!(
+            locator.locate("github.png"),
+            Some(tmp.path().join("images/github.png"))
+        );
     }
 
     #[test]
@@ -121,7 +124,10 @@ mod tests {
         let tmp = vault();
         let seen = RefCell::new(HashMap::new());
         let locator = Locator::new(Some(tmp.path().to_path_buf()), Some(tmp.path()), &seen);
-        assert_eq!(locator.locate("beside.png"), Some(tmp.path().join("beside.png")));
+        assert_eq!(
+            locator.locate("beside.png"),
+            Some(tmp.path().join("beside.png"))
+        );
     }
 
     #[test]
@@ -150,7 +156,10 @@ mod tests {
         let locator = Locator::new(Some(tmp.path().to_path_buf()), Some(tmp.path()), &seen);
         // Not found anywhere, so it resolves beside the note and shows as broken
         // there rather than against the preview cache directory.
-        assert_eq!(locator.locate("nope.png"), Some(tmp.path().join("nope.png")));
+        assert_eq!(
+            locator.locate("nope.png"),
+            Some(tmp.path().join("nope.png"))
+        );
     }
 
     #[test]
@@ -162,7 +171,10 @@ mod tests {
         assert!(seen.borrow().contains_key("github.png"));
         // Removing the file does not change the answer while it is cached.
         std::fs::remove_file(tmp.path().join("images/github.png")).unwrap();
-        assert_eq!(locator.locate("github.png"), Some(tmp.path().join("images/github.png")));
+        assert_eq!(
+            locator.locate("github.png"),
+            Some(tmp.path().join("images/github.png"))
+        );
     }
 
     #[test]
@@ -170,6 +182,9 @@ mod tests {
         let tmp = vault();
         let seen = RefCell::new(HashMap::new());
         let locator = Locator::new(Some(tmp.path().to_path_buf()), None, &seen);
-        assert_eq!(locator.locate("github.png"), Some(tmp.path().join("github.png")));
+        assert_eq!(
+            locator.locate("github.png"),
+            Some(tmp.path().join("github.png"))
+        );
     }
 }

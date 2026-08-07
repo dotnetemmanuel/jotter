@@ -76,7 +76,11 @@ fn the_preview_colors_csharp_and_kotlin_blocks() {
     let src = "```csharp\n// note\nvar x = 42;\n```\n\n```kotlin\n// note\nval y = 7\n```\n";
     let rendered = render(src, &test_code(), &no_links, &jotter_parser::NoImages);
     let comments = rendered.html.matches("color:#6a9955").count();
-    assert_eq!(comments, 2, "one colored comment per block:\n{}", rendered.html);
+    assert_eq!(
+        comments, 2,
+        "one colored comment per block:\n{}",
+        rendered.html
+    );
     assert!(rendered.html.contains("color:#b5cea8"), "numbers colored");
 }
 

@@ -140,9 +140,9 @@ impl Index {
     /// Applies each migration whose number exceeds `user_version`, in order, in a
     /// transaction, then bumps `user_version`. Idempotent across reopens.
     fn run_migrations(&self) -> Result<(), IndexError> {
-        let current: i64 =
-            self.conn
-                .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let current: i64 = self
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
         for (number, sql) in MIGRATIONS {
             if *number <= current {
                 continue;
@@ -331,9 +331,9 @@ impl Index {
     /// # Errors
     /// Returns [`IndexError::Sqlite`] on query failure.
     pub fn all_notes(&self) -> Result<Vec<Note>, IndexError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, path, title, mtime, size, frontmatter FROM notes ORDER BY path",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path, title, mtime, size, frontmatter FROM notes ORDER BY path")?;
         let rows = stmt.query_map([], Self::map_note)?;
         let mut notes = Vec::new();
         for note in rows {
@@ -377,7 +377,9 @@ impl Index {
         let mut stmt = self
             .conn
             // DISTINCT: one note can reach the same target by stem and by path.
-            .prepare("SELECT DISTINCT src_note_id FROM links WHERE dst_path = ?1 AND resolved = 1")?;
+            .prepare(
+                "SELECT DISTINCT src_note_id FROM links WHERE dst_path = ?1 AND resolved = 1",
+            )?;
         let rows = stmt.query_map(params![dst_path], |row| row.get(0))?;
         let mut ids = Vec::new();
         for id in rows {
@@ -391,9 +393,9 @@ impl Index {
     /// # Errors
     /// Returns [`IndexError::Sqlite`] on query failure.
     pub fn tag_counts(&self) -> Result<Vec<(String, i64)>, IndexError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT tag, count(*) FROM tags GROUP BY tag ORDER BY tag",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tag, count(*) FROM tags GROUP BY tag ORDER BY tag")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         let mut counts = Vec::new();
         for row in rows {
@@ -725,9 +727,7 @@ mod tests {
     fn set_tags_replaces() {
         let index = Index::open_in_memory().unwrap();
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
-        index
-            .set_tags(id, &["one".into(), "two".into()])
-            .unwrap();
+        index.set_tags(id, &["one".into(), "two".into()]).unwrap();
         assert_eq!(index.tags_for(id).unwrap(), vec!["one", "two"]);
         index.set_tags(id, &["three".into()]).unwrap();
         assert_eq!(index.tags_for(id).unwrap(), vec!["three"]);
@@ -750,9 +750,11 @@ mod tests {
             .unwrap();
         let count: i64 = index
             .conn
-            .query_row("SELECT count(*) FROM links WHERE src_note_id = ?1", [id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT count(*) FROM links WHERE src_note_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 2);
         index
@@ -760,9 +762,11 @@ mod tests {
             .unwrap();
         let count: i64 = index
             .conn
-            .query_row("SELECT count(*) FROM links WHERE src_note_id = ?1", [id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT count(*) FROM links WHERE src_note_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -802,7 +806,14 @@ mod tests {
         let index = Index::open_in_memory().unwrap();
         let id = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index
-            .set_links(id, &[LinkRecord { target: "work/standup.md".into(), dst_path: "work/standup.md".into(), resolved: true }])
+            .set_links(
+                id,
+                &[LinkRecord {
+                    target: "work/standup.md".into(),
+                    dst_path: "work/standup.md".into(),
+                    resolved: true,
+                }],
+            )
             .unwrap();
 
         index.reresolve_links(|_| None).unwrap();
@@ -839,9 +850,7 @@ mod tests {
             .reresolve_links(|_| Some("personal/standup.md".to_owned()))
             .unwrap();
         index
-            .reresolve_links(|target| {
-                (target == "standup").then(|| "work/standup.md".to_owned())
-            })
+            .reresolve_links(|target| (target == "standup").then(|| "work/standup.md".to_owned()))
             .unwrap();
 
         // The stem must fall through to the surviving note, not go broken.
@@ -883,7 +892,14 @@ mod tests {
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
         let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
         index
-            .set_links(a, &[LinkRecord { target: "target.md".into(), dst_path: "target.md".into(), resolved: true }])
+            .set_links(
+                a,
+                &[LinkRecord {
+                    target: "target.md".into(),
+                    dst_path: "target.md".into(),
+                    resolved: true,
+                }],
+            )
             .unwrap();
         index
             .set_links(b, &[LinkRecord::unresolved("target.md")])
@@ -896,7 +912,9 @@ mod tests {
         let index = Index::open_in_memory().unwrap();
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
         index.upsert_note(&note("b.md", "B", "")).unwrap();
-        index.set_links(a, &[LinkRecord::resolved("b", "b.md")]).unwrap();
+        index
+            .set_links(a, &[LinkRecord::resolved("b", "b.md")])
+            .unwrap();
         let found = index.linking_notes("b.md").unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, "a.md");
@@ -909,7 +927,9 @@ mod tests {
         index.upsert_note(&note("target.md", "T", "")).unwrap();
         for name in ["z.md", "a.md"] {
             let id = index.upsert_note(&note(name, name, "")).unwrap();
-            index.set_links(id, &[LinkRecord::resolved("target", "target.md")]).unwrap();
+            index
+                .set_links(id, &[LinkRecord::resolved("target", "target.md")])
+                .unwrap();
         }
         let paths: Vec<String> = index
             .linking_notes("target.md")
@@ -924,7 +944,9 @@ mod tests {
     fn an_unresolved_link_is_not_a_backlink() {
         let index = Index::open_in_memory().unwrap();
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
-        index.set_links(a, &[LinkRecord::unresolved("ghost")]).unwrap();
+        index
+            .set_links(a, &[LinkRecord::unresolved("ghost")])
+            .unwrap();
         assert!(index.linking_notes("ghost").unwrap().is_empty());
     }
 
@@ -1029,8 +1051,12 @@ mod tests {
     #[test]
     fn search_notes_returns_matches_ranked() {
         let index = Index::open_in_memory().unwrap();
-        index.upsert_note(&note("a.md", "Alpha", "webkit rendering notes")).unwrap();
-        index.upsert_note(&note("b.md", "Beta", "nothing to see")).unwrap();
+        index
+            .upsert_note(&note("a.md", "Alpha", "webkit rendering notes"))
+            .unwrap();
+        index
+            .upsert_note(&note("b.md", "Beta", "nothing to see"))
+            .unwrap();
         let found = index.search_notes("webkit", 10).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].path, "a.md");
@@ -1041,7 +1067,9 @@ mod tests {
     fn search_notes_respects_the_limit() {
         let index = Index::open_in_memory().unwrap();
         for name in ["a.md", "b.md", "c.md"] {
-            index.upsert_note(&note(name, name, "shared webkit body")).unwrap();
+            index
+                .upsert_note(&note(name, name, "shared webkit body"))
+                .unwrap();
         }
         assert_eq!(index.search_notes("webkit", 2).unwrap().len(), 2);
     }
@@ -1049,7 +1077,9 @@ mod tests {
     #[test]
     fn search_notes_matches_the_title_too() {
         let index = Index::open_in_memory().unwrap();
-        index.upsert_note(&note("a.md", "Webkit rendering", "unrelated body")).unwrap();
+        index
+            .upsert_note(&note("a.md", "Webkit rendering", "unrelated body"))
+            .unwrap();
         assert_eq!(index.search_notes("webkit", 10).unwrap().len(), 1);
     }
 
@@ -1075,8 +1105,12 @@ mod tests {
         let index = Index::open_in_memory().unwrap();
         let a = index.upsert_note(&note("a.md", "A", "")).unwrap();
         let b = index.upsert_note(&note("b.md", "B", "")).unwrap();
-        index.set_tags(a, &["project".into(), "demo".into()]).unwrap();
-        index.set_tags(b, &["project".into(), "alpha".into()]).unwrap();
+        index
+            .set_tags(a, &["project".into(), "demo".into()])
+            .unwrap();
+        index
+            .set_tags(b, &["project".into(), "alpha".into()])
+            .unwrap();
         assert_eq!(
             index.tag_counts().unwrap(),
             [

@@ -219,7 +219,8 @@ impl Panel {
         let names = self.names.borrow().clone();
         let counts = self.top_counts.borrow().clone();
         for (name, uses) in names.iter().zip(counts.iter()) {
-            self.top.append(&top_row(self.kind, self.style.get(), name, *uses));
+            self.top
+                .append(&top_row(self.kind, self.style.get(), name, *uses));
         }
         let restored = was_selected.and_then(|name| self.row_named(&name));
         if let Some(row) = &restored {
@@ -264,10 +265,7 @@ impl Panel {
     /// selected row where there is one.
     pub fn focus_list(&self) {
         if matches!(*self.view.borrow(), View::Top) {
-            let row = self
-                .top
-                .selected_row()
-                .or_else(|| self.top.row_at_index(0));
+            let row = self.top.selected_row().or_else(|| self.top.row_at_index(0));
             if let Some(row) = row {
                 self.top.select_row(Some(&row));
                 row.grab_focus();
@@ -291,7 +289,8 @@ impl Panel {
 
     /// Sets the heading label styled for the active dress, and remembers it unstyled.
     fn write_heading(&self, text: String) {
-        self.heading.set_text(&crate::style::heading(self.style.get(), &text));
+        self.heading
+            .set_text(&crate::style::heading(self.style.get(), &text));
         *self.last_heading.borrow_mut() = text;
     }
 }

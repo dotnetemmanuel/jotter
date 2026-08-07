@@ -104,7 +104,10 @@ pub fn style_name(style: Style) -> &'static str {
 ///
 /// # Errors
 /// Returns the theming error if the file cannot be resolved for that mode.
-pub fn resolve(file: &ThemeFile, appearance: &Appearance) -> Result<Theme, jotter_theming::ThemeError> {
+pub fn resolve(
+    file: &ThemeFile,
+    appearance: &Appearance,
+) -> Result<Theme, jotter_theming::ThemeError> {
     let mut theme = file.resolve(mode_of(appearance))?;
     apply(&mut theme, appearance);
     Ok(theme)
@@ -125,7 +128,10 @@ mod tests {
         let untouched = theme();
         let mut applied = theme();
         apply(&mut applied, &Appearance::default());
-        assert_eq!(applied.typography.editor_font, untouched.typography.editor_font);
+        assert_eq!(
+            applied.typography.editor_font,
+            untouched.typography.editor_font
+        );
         assert_eq!(applied.typography.font_size, untouched.typography.font_size);
     }
 
@@ -155,7 +161,10 @@ mod tests {
                 ..Appearance::default()
             },
         );
-        assert_eq!(applied.typography.editor_font, untouched.typography.editor_font);
+        assert_eq!(
+            applied.typography.editor_font,
+            untouched.typography.editor_font
+        );
     }
 
     #[test]
@@ -238,7 +247,10 @@ mod tests {
             ..Appearance::default()
         };
         assert_eq!(mode_of(&light), Mode::Light);
-        assert_eq!(mode_of(&Appearance::default()), jotter_theming::bundled::DEFAULT_MODE);
+        assert_eq!(
+            mode_of(&Appearance::default()),
+            jotter_theming::bundled::DEFAULT_MODE
+        );
     }
 
     #[test]

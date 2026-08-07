@@ -290,7 +290,10 @@ impl TempFile {
 
     fn flush(&mut self) -> std::io::Result<()> {
         use std::io::Write;
-        let file = self.file.as_mut().expect("file handle present until persist");
+        let file = self
+            .file
+            .as_mut()
+            .expect("file handle present until persist");
         file.flush()?;
         file.sync_all()
     }

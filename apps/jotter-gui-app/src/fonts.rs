@@ -55,10 +55,15 @@ mod tests {
     use super::matching;
 
     fn installed() -> Vec<String> {
-        ["CaskaydiaMono Nerd Font", "DejaVu Sans", "Inter", "Iosevka Term"]
-            .into_iter()
-            .map(str::to_string)
-            .collect()
+        [
+            "CaskaydiaMono Nerd Font",
+            "DejaVu Sans",
+            "Inter",
+            "Iosevka Term",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
     }
 
     #[test]

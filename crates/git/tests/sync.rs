@@ -107,7 +107,10 @@ fn changes_are_committed_and_pushed() {
     write(&world.two, "new.md", "# New\n");
     write(&world.two, "index.md", "# Index\n\nEdited.\n");
 
-    let report = Repo::discover(&world.two).unwrap().sync("jotter: 2 notes").unwrap();
+    let report = Repo::discover(&world.two)
+        .unwrap()
+        .sync("jotter: 2 notes")
+        .unwrap();
 
     assert_eq!(report.committed, 2);
     assert_eq!(report.pushed, 1);

@@ -23,7 +23,10 @@ fn an_empty_override_is_ignored() {
 
 #[test]
 fn the_config_and_data_lookups_resolve_independently() {
-    let config = resolve(Some(OsStr::new("/config-override")), Path::new("/config-base"));
+    let config = resolve(
+        Some(OsStr::new("/config-override")),
+        Path::new("/config-base"),
+    );
     let data = resolve(None, Path::new("/data-base"));
     assert_eq!(config, Path::new("/config-override"));
     assert_eq!(data, Path::new("/data-base/jotter"));

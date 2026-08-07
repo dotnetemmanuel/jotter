@@ -7,8 +7,8 @@
 
 use std::rc::Rc;
 
-use gtk::prelude::*;
 use gtk::Orientation;
+use gtk::prelude::*;
 
 /// Nerd Font glyphs, so the rail looks the same wherever jotter runs rather than
 /// depending on whichever icon theme is installed. Both come from the Material

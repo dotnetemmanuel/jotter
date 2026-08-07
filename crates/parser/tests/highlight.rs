@@ -110,7 +110,10 @@ fn a_second_palette_recolors_the_same_text() {
     assert_ne!(first, second);
     assert_eq!(first, first_again);
     assert!(second.contains("#6a737d"), "light comment color missing");
-    assert!(!second.contains("#6a9955"), "dark comment color leaked into light");
+    assert!(
+        !second.contains("#6a9955"),
+        "dark comment color leaked into light"
+    );
 }
 
 /// The editor path and the preview path agree on which blocks get color.
@@ -120,6 +123,9 @@ fn both_paths_color_the_same_languages() {
     let spans = codeblock::color_spans(FIXTURE, &dark());
     for color in ["#6a9955", "#ce9178", "#4ec9b0"] {
         assert!(html.contains(color), "{color} missing from preview");
-        assert!(spans.iter().any(|span| span.color == color), "{color} missing from editor");
+        assert!(
+            spans.iter().any(|span| span.color == color),
+            "{color} missing from editor"
+        );
     }
 }

@@ -30,7 +30,10 @@ pub enum PathsError {
 /// Returns [`PathsError`] if the platform cannot locate the user's home directory.
 pub fn config_dir() -> Result<PathBuf, PathsError> {
     let base = etcetera::choose_base_strategy()?.config_dir();
-    Ok(resolve(std::env::var_os("JOTTER_CONFIG_DIR").as_deref(), &base))
+    Ok(resolve(
+        std::env::var_os("JOTTER_CONFIG_DIR").as_deref(),
+        &base,
+    ))
 }
 
 /// The directory jotter keeps its own data in.
@@ -42,7 +45,10 @@ pub fn config_dir() -> Result<PathBuf, PathsError> {
 /// Returns [`PathsError`] if the platform cannot locate the user's home directory.
 pub fn data_dir() -> Result<PathBuf, PathsError> {
     let base = etcetera::choose_base_strategy()?.data_dir();
-    Ok(resolve(std::env::var_os("JOTTER_DATA_DIR").as_deref(), &base))
+    Ok(resolve(
+        std::env::var_os("JOTTER_DATA_DIR").as_deref(),
+        &base,
+    ))
 }
 
 /// Resolves a directory from an optional override and the platform base directory.

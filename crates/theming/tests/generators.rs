@@ -56,7 +56,11 @@ fn event_horizon_dark_preview_css() {
 
 #[test]
 fn retro82_dark_tui_gtk_css() {
-    insta::assert_snapshot!(resolve("retro82", Mode::Dark).with_style(Style::Tui).to_gtk_css());
+    insta::assert_snapshot!(
+        resolve("retro82", Mode::Dark)
+            .with_style(Style::Tui)
+            .to_gtk_css()
+    );
 }
 
 #[test]

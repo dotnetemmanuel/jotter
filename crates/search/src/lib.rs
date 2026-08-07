@@ -197,11 +197,7 @@ fn is_subsequence(needle: &[char], hay: &[(usize, char)], sensitive: bool) -> bo
 }
 
 fn fold(c: char, sensitive: bool) -> char {
-    if sensitive {
-        c
-    } else {
-        c.to_ascii_lowercase()
-    }
+    if sensitive { c } else { c.to_ascii_lowercase() }
 }
 
 /// Adds to a score unless it is the "unreachable" sentinel.

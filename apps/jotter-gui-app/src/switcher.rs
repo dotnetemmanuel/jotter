@@ -92,7 +92,10 @@ mod tests {
 
     #[test]
     fn an_empty_query_lists_recents_in_order() {
-        let recents = vec!["inbox/groceries.md".to_string(), "notes/phase3-plan.md".to_string()];
+        let recents = vec![
+            "inbox/groceries.md".to_string(),
+            "notes/phase3-plan.md".to_string(),
+        ];
         assert_eq!(keys("", &recents, 10), recents);
     }
 
