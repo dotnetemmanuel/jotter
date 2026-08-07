@@ -29,7 +29,11 @@ turns out wrong during implementation, change it here first, then implement.
 - Nothing under `crates/` may depend on gtk, glib, gdk, pango or webkit. This holds
   today for `parser`, `index`, `vault`, `git`, `theming` and `search`. It fails for
   `app`, `editor` and `preview`, which are GUI code filed under `crates/` by habit and
-  move into `apps/jotter/`.
+  move to `apps/jotter-gui-app`, `apps/jotter-gui-editor` and `apps/jotter-gui-preview`.
+  Flat under `apps/`, not nested inside the binary crate: `crates/app/src` reaches the
+  repo root through three levels of `..` and so does `apps/jotter-gui-app/src`, which
+  keeps every `include_str!` into `resources/` working untouched. Nesting adds a level
+  and breaks all four of them.
 
 ### Notes and tasks are two different worlds
 
@@ -260,7 +264,8 @@ Each phase is independently shippable and leaves the GUI working.
 
 No user-visible change, and the GUI must behave identically at the end of it.
 
-- Move `crates/app`, `crates/editor` and `crates/preview` under `apps/jotter/`.
+- Move `crates/app`, `crates/editor` and `crates/preview` to flat siblings under
+  `apps/`, and rename `apps/jotter` to `apps/jotter-gui`.
 - Rename the GTK binary to `jotter-gui`. Update the PATH wrapper the same day. Between
   T0 and T3 there is no `jotter` binary at all, which is the point: the name is free
   when the TUI arrives rather than being taken by the app it is replacing.

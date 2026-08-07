@@ -20,7 +20,7 @@ git-backed folder of plain `.md` files. Notes are files; tasks are not.
 Break one of these and something further away breaks quietly.
 
 **Nothing under `crates/` may depend on gtk, glib, gdk, pango, webkit or sourceview.**
-CI fails the build if one reappears. GUI code belongs under `apps/jotter/`.
+CI fails the build if one reappears. GUI code belongs under `apps/`.
 
 **Tasks never touch a vault.** They live in the machine-level database in the data
 directory. Switching vault must not change which tasks are shown, and cloning a vault
