@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Install GTK system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libwebkitgtk-6.0-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Install GTK system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libwebkitgtk-6.0-dev
+      - run: cargo test --workspace
+
+  # GTK4, GtkSourceView and WebKitGTK do not build on macOS or Windows, so these runners cover crates/ only.
+  test-portable:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Build crates
+        run: >
+          cargo build
+          --package jotter-git
+          --package jotter-index
+          --package jotter-parser
+          --package jotter-paths
+          --package jotter-search
+          --package jotter-theming
+          --package jotter-vault
+      - name: Test crates
+        run: >
+          cargo test
+          --package jotter-git
+          --package jotter-index
+          --package jotter-parser
+          --package jotter-paths
+          --package jotter-search
+          --package jotter-theming
+          --package jotter-vault
+
+  # Fails if any crate under crates/ pulls in GTK, GLib, or their transitive libraries.
+  guard-core-is-gui-free:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show
+      - name: Guard core crates against GTK dependencies
+        run: |
+          set -euo pipefail
+          forbidden='gtk|glib|gdk|pango|webkit|sourceview|gobject|graphene|cairo'
+          failed=0
+          for pkg in jotter-git jotter-index jotter-parser jotter-paths jotter-search jotter-theming jotter-vault; do
+            echo "checking $pkg"
+            tree_output="$(cargo tree --edges normal --package "$pkg")"
+            if matches="$(echo "$tree_output" | grep -Ei "$forbidden")"; then
+              echo "GTK dependency found in $pkg:"
+              echo "$matches"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "guard-core-is-gui-free: FAILED"
+            exit 1
+          fi
+          echo "guard-core-is-gui-free: PASSED"
