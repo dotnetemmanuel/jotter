@@ -55,6 +55,48 @@ fn moving_a_task_to_done_records_when() {
 }
 
 #[test]
+fn marking_a_task_done_twice_keeps_the_first_completion_instant() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks.db");
+    let task_id = {
+        let store = Store::open(&path).unwrap();
+        let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
+        command::move_task_to_state(&store, task.id, TaskState::Done).unwrap();
+        task.id
+    };
+
+    // Pin the first completion instant to a known value the real clock could never produce.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE tasks SET completed_at = 111111 WHERE id = ?1",
+        (task_id,),
+    )
+    .unwrap();
+    drop(conn);
+
+    let store = Store::open(&path).unwrap();
+    command::move_task_to_state(&store, task_id, TaskState::Done).unwrap();
+
+    let redone = query::get_task(&store, task_id).unwrap().unwrap();
+    assert_eq!(redone.completed_at, Some(111_111));
+}
+
+#[test]
+fn bouncing_out_of_done_and_back_in_stamps_a_fresh_completion_instant() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
+
+    command::move_task_to_state(&store, task.id, TaskState::Done).unwrap();
+    command::move_task_to_state(&store, task.id, TaskState::InProgress).unwrap();
+    let bounced = query::get_task(&store, task.id).unwrap().unwrap();
+    assert_eq!(bounced.completed_at, None);
+
+    command::move_task_to_state(&store, task.id, TaskState::Done).unwrap();
+    let redone = query::get_task(&store, task.id).unwrap().unwrap();
+    assert!(redone.completed_at.is_some());
+}
+
+#[test]
 fn moving_a_task_out_of_done_clears_when() {
     let store = Store::open_in_memory().unwrap();
     let task = command::create_task(&store, "Ship it", None, None, None).unwrap();

@@ -130,16 +130,24 @@ pub fn rename_task(store: &Store, task_id: i64, new_title: &str) -> Result<(), S
 }
 
 /// Moves a task to the given state. Moving to [`TaskState::Done`] stamps the
-/// completion instant; moving to any other state clears it, so a task bounced back
-/// out of done never keeps a stale completion time.
+/// completion instant, unless one is already set, so re-marking an already-done
+/// task does not overwrite when it first finished. Moving to any other state
+/// clears it, so a task bounced back out of done never keeps a stale completion
+/// time, and a later re-mark as done gets a fresh instant.
 ///
 /// # Errors
 /// Returns [`StoreError::Sqlite`] if the update fails.
 pub fn move_task_to_state(store: &Store, task_id: i64, state: TaskState) -> Result<(), StoreError> {
-    let completed_at = matches!(state, TaskState::Done).then(now_unix);
-    store.conn.execute(
-        "UPDATE tasks SET state = ?1, completed_at = ?2 WHERE id = ?3",
-        (state.column_text(), completed_at, task_id),
-    )?;
+    if matches!(state, TaskState::Done) {
+        store.conn.execute(
+            "UPDATE tasks SET state = ?1, completed_at = COALESCE(completed_at, ?2) WHERE id = ?3",
+            (state.column_text(), now_unix(), task_id),
+        )?;
+    } else {
+        store.conn.execute(
+            "UPDATE tasks SET state = ?1, completed_at = NULL WHERE id = ?2",
+            (state.column_text(), task_id),
+        )?;
+    }
     Ok(())
 }
