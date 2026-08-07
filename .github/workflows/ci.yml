@@ -16,7 +16,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libwebkitgtk-6.0-dev
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   test-linux:
     runs-on: ubuntu-latest
@@ -27,7 +27,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev libwebkitgtk-6.0-dev
-      - run: cargo test --workspace
+      - run: cargo test --locked --workspace
 
   # GTK4, GtkSourceView and WebKitGTK do not build on macOS or Windows, so these runners cover crates/ only.
   test-portable:
@@ -38,26 +38,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show
+      - name: Derive the crates/ package list
+        id: crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata="$(cargo metadata --format-version 1 --no-deps)"
+          workspace_root="$(echo "$metadata" | jq -r '.workspace_root')"
+          packages="$(echo "$metadata" | jq -r --arg root "$workspace_root/crates/" '.packages[] | select(.manifest_path | startswith($root)) | .name')"
+          if [ -z "$packages" ]; then
+            echo "test-portable: found no packages under crates/, refusing to pass on an empty check"
+            exit 1
+          fi
+          args=""
+          while IFS= read -r pkg; do
+            args="$args --package $pkg"
+          done <<< "$packages"
+          echo "package_args=$args" >> "$GITHUB_OUTPUT"
       - name: Build crates
-        run: >
-          cargo build
-          --package jotter-git
-          --package jotter-index
-          --package jotter-parser
-          --package jotter-paths
-          --package jotter-search
-          --package jotter-theming
-          --package jotter-vault
+        run: cargo build --locked ${{ steps.crates.outputs.package_args }}
       - name: Test crates
-        run: >
-          cargo test
-          --package jotter-git
-          --package jotter-index
-          --package jotter-parser
-          --package jotter-paths
-          --package jotter-search
-          --package jotter-theming
-          --package jotter-vault
+        run: cargo test --locked ${{ steps.crates.outputs.package_args }}
 
   # Fails if any crate under crates/ pulls in GTK, GLib, or their transitive libraries.
   guard-core-is-gui-free:
