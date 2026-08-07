@@ -27,6 +27,16 @@ fn check_due_date(due_date: Option<&str>) -> Result<(), StoreError> {
     }
 }
 
+/// Turns an `UPDATE`'s affected-row count into [`StoreError::NotFound`] when it
+/// matched nothing, so an update against an id another frontend already deleted
+/// errors instead of silently doing nothing.
+fn require_updated(rows_changed: usize, id: i64) -> Result<(), StoreError> {
+    if rows_changed == 0 {
+        return Err(StoreError::NotFound(id));
+    }
+    Ok(())
+}
+
 /// Creates a project with the given name and optional due date.
 ///
 /// # Errors
@@ -106,41 +116,44 @@ pub fn create_task(
 /// Files a task under a project.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the update fails.
+/// Returns [`StoreError::NotFound`] if `task_id` matches no task, or
+/// [`StoreError::Sqlite`] if the update fails.
 pub fn file_task_under_project(
     store: &Store,
     task_id: i64,
     project_id: i64,
 ) -> Result<(), StoreError> {
-    store.conn.execute(
+    let rows = store.conn.execute(
         "UPDATE tasks SET project_id = ?1 WHERE id = ?2",
         (project_id, task_id),
     )?;
-    Ok(())
+    require_updated(rows, task_id)
 }
 
 /// Removes a task from whatever project it is filed under, leaving it unfiled.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the update fails.
+/// Returns [`StoreError::NotFound`] if `task_id` matches no task, or
+/// [`StoreError::Sqlite`] if the update fails.
 pub fn unfile_task(store: &Store, task_id: i64) -> Result<(), StoreError> {
-    store.conn.execute(
+    let rows = store.conn.execute(
         "UPDATE tasks SET project_id = NULL WHERE id = ?1",
         (task_id,),
     )?;
-    Ok(())
+    require_updated(rows, task_id)
 }
 
 /// Renames a task, leaving every other field untouched.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the update fails.
+/// Returns [`StoreError::NotFound`] if `task_id` matches no task, or
+/// [`StoreError::Sqlite`] if the update fails.
 pub fn rename_task(store: &Store, task_id: i64, new_title: &str) -> Result<(), StoreError> {
-    store.conn.execute(
+    let rows = store.conn.execute(
         "UPDATE tasks SET title = ?1 WHERE id = ?2",
         (new_title, task_id),
     )?;
-    Ok(())
+    require_updated(rows, task_id)
 }
 
 /// Moves a task to the given state. Moving to [`TaskState::Done`] stamps the
@@ -150,20 +163,21 @@ pub fn rename_task(store: &Store, task_id: i64, new_title: &str) -> Result<(), S
 /// time, and a later re-mark as done gets a fresh instant.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the update fails.
+/// Returns [`StoreError::NotFound`] if `task_id` matches no task, or
+/// [`StoreError::Sqlite`] if the update fails.
 pub fn move_task_to_state(store: &Store, task_id: i64, state: TaskState) -> Result<(), StoreError> {
-    if matches!(state, TaskState::Done) {
+    let rows = if matches!(state, TaskState::Done) {
         store.conn.execute(
             "UPDATE tasks SET state = ?1, completed_at = COALESCE(completed_at, ?2) WHERE id = ?3",
             (state.column_text(), now_unix(), task_id),
-        )?;
+        )?
     } else {
         store.conn.execute(
             "UPDATE tasks SET state = ?1, completed_at = NULL WHERE id = ?2",
             (state.column_text(), task_id),
-        )?;
-    }
-    Ok(())
+        )?
+    };
+    require_updated(rows, task_id)
 }
 
 /// Deletes a task. Its subtasks go with it: the `ON DELETE CASCADE` foreign key
@@ -178,11 +192,11 @@ pub fn delete_task(store: &Store, task_id: i64) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// Adds a subtask, unchecked, to a task's checklist.
+/// Creates a subtask, unchecked, on a task's checklist.
 ///
 /// # Errors
 /// Returns [`StoreError::Sqlite`] if the insert fails.
-pub fn add_subtask(store: &Store, task_id: i64, title: &str) -> Result<Subtask, StoreError> {
+pub fn create_subtask(store: &Store, task_id: i64, title: &str) -> Result<Subtask, StoreError> {
     store.conn.execute(
         "INSERT INTO subtasks (task_id, title, done) VALUES (?1, ?2, 0)",
         (task_id, title),
@@ -198,33 +212,35 @@ pub fn add_subtask(store: &Store, task_id: i64, title: &str) -> Result<Subtask, 
 /// Renames a subtask, leaving its done state untouched.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the update fails.
+/// Returns [`StoreError::NotFound`] if `subtask_id` matches no subtask, or
+/// [`StoreError::Sqlite`] if the update fails.
 pub fn rename_subtask(store: &Store, subtask_id: i64, new_title: &str) -> Result<(), StoreError> {
-    store.conn.execute(
+    let rows = store.conn.execute(
         "UPDATE subtasks SET title = ?1 WHERE id = ?2",
         (new_title, subtask_id),
     )?;
-    Ok(())
+    require_updated(rows, subtask_id)
 }
 
 /// Flips a subtask between done and not done. Never touches the task it belongs
 /// to: a checklist line has no power to complete or reopen its task.
 ///
 /// # Errors
-/// Returns [`StoreError::Sqlite`] if the update fails.
+/// Returns [`StoreError::NotFound`] if `subtask_id` matches no subtask, or
+/// [`StoreError::Sqlite`] if the update fails.
 pub fn toggle_subtask(store: &Store, subtask_id: i64) -> Result<(), StoreError> {
-    store.conn.execute(
+    let rows = store.conn.execute(
         "UPDATE subtasks SET done = NOT done WHERE id = ?1",
         (subtask_id,),
     )?;
-    Ok(())
+    require_updated(rows, subtask_id)
 }
 
-/// Removes a single subtask, leaving its task and any sibling subtasks in place.
+/// Deletes a single subtask, leaving its task and any sibling subtasks in place.
 ///
 /// # Errors
 /// Returns [`StoreError::Sqlite`] if the delete fails.
-pub fn remove_subtask(store: &Store, subtask_id: i64) -> Result<(), StoreError> {
+pub fn delete_subtask(store: &Store, subtask_id: i64) -> Result<(), StoreError> {
     store
         .conn
         .execute("DELETE FROM subtasks WHERE id = ?1", (subtask_id,))?;

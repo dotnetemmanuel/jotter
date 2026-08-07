@@ -6,6 +6,11 @@
 //! a vault, never synced, and never rebuilt from source material. Losing it loses
 //! the tasks. It is deliberately synchronous, like `jotter-index`: callers own their
 //! own threading.
+//!
+//! Two frontends can hold the same id at once. An update against an id another
+//! frontend already deleted returns [`StoreError::NotFound`] rather than a silent
+//! no-op, so the caller learns its view is stale. A delete against a missing id
+//! stays a silent success: the caller wanted the row gone, and it is gone.
 
 use std::path::Path;
 
@@ -49,6 +54,11 @@ pub enum StoreError {
     /// A stored due date was not valid `YYYY-MM-DD` text.
     #[error("invalid due date {0:?}")]
     InvalidDueDate(String),
+    /// An update command targeted an id that matches no row, most often because
+    /// another frontend already deleted it. See the module doc for why updates and
+    /// deletes disagree on this.
+    #[error("no row with id {0}")]
+    NotFound(i64),
 }
 
 /// A handle to the task store. Wraps one synchronous `SQLite` connection.
@@ -78,31 +88,10 @@ impl Store {
         Self::init(conn)
     }
 
-    /// Shared setup: enable foreign keys, WAL mode, and a busy timeout, then migrate.
+    /// Shared setup: refuse a too-new database untouched, then enable foreign keys,
+    /// WAL mode, and a busy timeout, then migrate.
     fn init(conn: Connection) -> Result<Self, StoreError> {
-        // rusqlite does not enable foreign keys by default, so ON DELETE CASCADE and
-        // ON DELETE SET NULL both need this.
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        // journal_mode and busy_timeout both return their new value as a row,
-        // so pragma_update cannot set either; pragma_update_and_check reads it back.
-        let _: String =
-            conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
-        let _: i64 = conn.pragma_update_and_check(None, "busy_timeout", 5000, |row| row.get(0))?;
-        let store = Self { conn };
-        store.run_migrations()?;
-        Ok(store)
-    }
-
-    /// Applies each migration whose number exceeds `user_version`, in order, in a
-    /// transaction, then bumps `user_version`. Idempotent across reopens.
-    ///
-    /// Refuses outright, before touching anything, if `user_version` already exceeds
-    /// the highest migration this build knows: that means a newer jotter wrote this
-    /// database, and this build must not migrate, delete, or read it.
-    fn run_migrations(&self) -> Result<(), StoreError> {
-        let current: i64 = self
-            .conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        let current: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         let highest = MIGRATIONS
             .iter()
             .map(|(number, _)| *number)
@@ -114,13 +103,31 @@ impl Store {
                 highest,
             });
         }
+        // rusqlite does not enable foreign keys by default, so ON DELETE CASCADE and
+        // ON DELETE SET NULL both need this.
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        // journal_mode and busy_timeout both return their new value as a row,
+        // so pragma_update cannot set either; pragma_update_and_check reads it back.
+        let _: String =
+            conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+        let _: i64 = conn.pragma_update_and_check(None, "busy_timeout", 5000, |row| row.get(0))?;
+        let store = Self { conn };
+        store.run_migrations(current)?;
+        Ok(store)
+    }
+
+    /// Applies each migration whose number exceeds `current`, in order, in a
+    /// transaction, then bumps `user_version`. Idempotent across reopens.
+    ///
+    /// The too-new refusal already happened in `init`, before any pragma ran, so by
+    /// the time this runs `current` is known to be no higher than the last migration.
+    fn run_migrations(&self, current: i64) -> Result<(), StoreError> {
         for (number, sql) in MIGRATIONS {
             if *number <= current {
                 continue;
             }
             let tx = self.conn.unchecked_transaction()?;
             tx.execute_batch(sql)?;
-            // user_version does not accept a bound parameter, so format the trusted integer in.
             tx.pragma_update(None, "user_version", number)?;
             tx.commit()?;
         }

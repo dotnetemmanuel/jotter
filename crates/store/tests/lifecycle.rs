@@ -157,7 +157,7 @@ fn a_subtask_belongs_to_exactly_one_task() {
     let first = command::create_task(&store, "Plan the trip", None, None, None).unwrap();
     let second = command::create_task(&store, "Pack", None, None, None).unwrap();
 
-    let subtask = command::add_subtask(&store, first.id, "Book flights").unwrap();
+    let subtask = command::create_subtask(&store, first.id, "Book flights").unwrap();
     assert_eq!(subtask.task_id, first.id);
     assert!(!subtask.done);
 
@@ -170,7 +170,7 @@ fn a_subtask_belongs_to_exactly_one_task() {
     let renamed = query::subtasks_for_task(&store, first.id).unwrap();
     assert_eq!(renamed[0].title, "Book flights and hotel");
 
-    command::remove_subtask(&store, subtask.id).unwrap();
+    command::delete_subtask(&store, subtask.id).unwrap();
     assert!(
         query::subtasks_for_task(&store, first.id)
             .unwrap()
@@ -182,8 +182,8 @@ fn a_subtask_belongs_to_exactly_one_task() {
 fn renaming_a_subtask_leaves_its_siblings_untouched() {
     let store = Store::open_in_memory().unwrap();
     let task = command::create_task(&store, "Launch", None, None, None).unwrap();
-    let one = command::add_subtask(&store, task.id, "Write docs").unwrap();
-    let two = command::add_subtask(&store, task.id, "Cut release").unwrap();
+    let one = command::create_subtask(&store, task.id, "Write docs").unwrap();
+    let two = command::create_subtask(&store, task.id, "Cut release").unwrap();
     command::toggle_subtask(&store, two.id).unwrap();
 
     command::rename_subtask(&store, one.id, "Write docs and changelog").unwrap();
@@ -200,12 +200,12 @@ fn renaming_a_subtask_leaves_its_siblings_untouched() {
 fn removing_a_subtask_leaves_its_siblings_and_task_untouched() {
     let store = Store::open_in_memory().unwrap();
     let task = command::create_task(&store, "Launch", None, None, None).unwrap();
-    let one = command::add_subtask(&store, task.id, "Write docs").unwrap();
-    let two = command::add_subtask(&store, task.id, "Cut release").unwrap();
-    let three = command::add_subtask(&store, task.id, "Announce").unwrap();
+    let one = command::create_subtask(&store, task.id, "Write docs").unwrap();
+    let two = command::create_subtask(&store, task.id, "Cut release").unwrap();
+    let three = command::create_subtask(&store, task.id, "Announce").unwrap();
     command::toggle_subtask(&store, three.id).unwrap();
 
-    command::remove_subtask(&store, two.id).unwrap();
+    command::delete_subtask(&store, two.id).unwrap();
 
     let remaining = query::subtasks_for_task(&store, task.id).unwrap();
     let remaining_ids: Vec<i64> = remaining.iter().map(|s| s.id).collect();
@@ -220,8 +220,8 @@ fn removing_a_subtask_leaves_its_siblings_and_task_untouched() {
 fn deleting_a_task_deletes_its_subtasks() {
     let store = Store::open_in_memory().unwrap();
     let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
-    command::add_subtask(&store, task.id, "Write changelog").unwrap();
-    command::add_subtask(&store, task.id, "Tag the release").unwrap();
+    command::create_subtask(&store, task.id, "Write changelog").unwrap();
+    command::create_subtask(&store, task.id, "Tag the release").unwrap();
 
     command::delete_task(&store, task.id).unwrap();
 
@@ -237,9 +237,9 @@ fn deleting_a_task_deletes_its_subtasks() {
 fn subtasks_come_back_in_a_stable_order() {
     let store = Store::open_in_memory().unwrap();
     let task = command::create_task(&store, "Launch", None, None, None).unwrap();
-    let one = command::add_subtask(&store, task.id, "Write docs").unwrap();
-    let two = command::add_subtask(&store, task.id, "Cut release").unwrap();
-    let three = command::add_subtask(&store, task.id, "Announce").unwrap();
+    let one = command::create_subtask(&store, task.id, "Write docs").unwrap();
+    let two = command::create_subtask(&store, task.id, "Cut release").unwrap();
+    let three = command::create_subtask(&store, task.id, "Announce").unwrap();
 
     let first_read = query::subtasks_for_task(&store, task.id).unwrap();
     let second_read = query::subtasks_for_task(&store, task.id).unwrap();
@@ -259,7 +259,7 @@ fn toggling_a_subtask_does_not_touch_its_task() {
     command::move_task_to_state(&store, task.id, TaskState::Done).unwrap();
     let before = query::get_task(&store, task.id).unwrap().unwrap();
 
-    let subtask = command::add_subtask(&store, task.id, "Write changelog").unwrap();
+    let subtask = command::create_subtask(&store, task.id, "Write changelog").unwrap();
     command::toggle_subtask(&store, subtask.id).unwrap();
 
     let after = query::get_task(&store, task.id).unwrap().unwrap();
@@ -285,4 +285,49 @@ fn an_unrecognised_state_in_the_database_is_an_error() {
     let err = query::get_task(&store, 1).unwrap_err();
 
     assert!(matches!(err, StoreError::UnknownTaskState(ref state) if state == "wat"));
+}
+
+#[test]
+fn updating_a_missing_task_or_subtask_is_an_error() {
+    let store = Store::open_in_memory().unwrap();
+    let task = command::create_task(&store, "Ship it", None, None, None).unwrap();
+    let subtask = command::create_subtask(&store, task.id, "Write changelog").unwrap();
+    command::delete_task(&store, task.id).unwrap();
+
+    let missing_task = task.id;
+    let missing_subtask = subtask.id;
+
+    assert!(matches!(
+        command::rename_task(&store, missing_task, "New title"),
+        Err(StoreError::NotFound(id)) if id == missing_task
+    ));
+    assert!(matches!(
+        command::move_task_to_state(&store, missing_task, TaskState::Done),
+        Err(StoreError::NotFound(id)) if id == missing_task
+    ));
+    assert!(matches!(
+        command::file_task_under_project(&store, missing_task, 1),
+        Err(StoreError::NotFound(id)) if id == missing_task
+    ));
+    assert!(matches!(
+        command::unfile_task(&store, missing_task),
+        Err(StoreError::NotFound(id)) if id == missing_task
+    ));
+    assert!(matches!(
+        command::rename_subtask(&store, missing_subtask, "New title"),
+        Err(StoreError::NotFound(id)) if id == missing_subtask
+    ));
+    assert!(matches!(
+        command::toggle_subtask(&store, missing_subtask),
+        Err(StoreError::NotFound(id)) if id == missing_subtask
+    ));
+}
+
+#[test]
+fn deleting_a_missing_task_or_project_or_subtask_is_a_silent_success() {
+    let store = Store::open_in_memory().unwrap();
+
+    assert!(command::delete_task(&store, 999).is_ok());
+    assert!(command::delete_project(&store, 999).is_ok());
+    assert!(command::delete_subtask(&store, 999).is_ok());
 }
