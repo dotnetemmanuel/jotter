@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 /// How many recent vaults to keep. Older entries drop off the end.
@@ -170,11 +171,19 @@ impl Config {
 }
 
 /// The directory jotter keeps its own files in.
+///
+/// Falls back to a relative `jotter` directory if the platform cannot locate
+/// the user's home directory, an error logged rather than silenced: every
+/// other IO failure in this module gets the same non-fatal treatment.
 #[must_use]
 pub fn config_dir() -> PathBuf {
-    let mut dir = gtk::glib::user_config_dir();
-    dir.push("jotter");
-    dir
+    match jotter_paths::config_dir().context("could not locate the config directory") {
+        Ok(dir) => dir,
+        Err(err) => {
+            eprintln!("jotter: {err:#}");
+            PathBuf::from("jotter")
+        }
+    }
 }
 
 /// The absolute config file path under the user config dir.

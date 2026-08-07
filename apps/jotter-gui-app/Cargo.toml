@@ -10,6 +10,7 @@ jotter-editor = { version = "0.1.0", package = "jotter-gui-editor", path = "../j
 jotter-git = { version = "0.1.0", path = "../../crates/git" }
 jotter-index = { version = "0.1.0", path = "../../crates/index" }
 jotter-parser = { version = "0.1.0", path = "../../crates/parser" }
+jotter-paths = { version = "0.1.0", path = "../../crates/paths" }
 jotter-preview = { version = "0.1.0", package = "jotter-gui-preview", path = "../jotter-gui-preview" }
 jotter-search = { version = "0.1.0", path = "../../crates/search" }
 jotter-theming = { version = "0.1.0", path = "../../crates/theming" }
