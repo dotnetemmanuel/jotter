@@ -2,8 +2,9 @@
 //! reads the clock; anything time-derived belongs to a command or to the caller.
 
 use rusqlite::Row;
+use time::{Date, Weekday};
 
-use crate::{Project, Store, StoreError, Subtask, Task, TaskState};
+use crate::{Project, Store, StoreError, Subtask, Task, TaskState, date};
 
 struct TaskRow {
     id: i64,
@@ -127,4 +128,100 @@ pub fn subtasks_for_task(store: &Store, task_id: i64) -> Result<Vec<Subtask>, St
         subtasks.push(row?);
     }
     Ok(subtasks)
+}
+
+/// Fetches every task that is not done and has a due date, for the derived
+/// listings that only ever care about tasks still needing attention.
+fn undone_dated_tasks(store: &Store) -> Result<Vec<Task>, StoreError> {
+    let sql =
+        format!("SELECT {TASK_COLUMNS} FROM tasks WHERE due_date IS NOT NULL AND state != ?1");
+    let mut stmt = store.conn.prepare(&sql)?;
+    let rows = stmt.query_map((TaskState::Done.column_text(),), extract_task_row)?;
+    let mut tasks = Vec::new();
+    for row in rows {
+        tasks.push(row_to_task(row?)?);
+    }
+    Ok(tasks)
+}
+
+/// Lists every task overdue as of `today`: not done, dated, and that date already
+/// passed. See [`crate::date::is_overdue`] for the boundary cases.
+///
+/// # Errors
+/// Returns [`StoreError::InvalidDueDate`] if a stored due date does not parse,
+/// [`StoreError::UnknownTaskState`] if a stored state does not parse, or
+/// [`StoreError::Sqlite`] if the query fails.
+pub fn overdue_tasks(store: &Store, today: Date) -> Result<Vec<Task>, StoreError> {
+    let mut overdue = Vec::new();
+    for task in undone_dated_tasks(store)? {
+        let Some(due_text) = task.due_date.as_deref() else {
+            continue;
+        };
+        let due = date::parse_due_date(due_text)?;
+        if date::is_overdue(Some(due), false, today) {
+            overdue.push(task);
+        }
+    }
+    Ok(overdue)
+}
+
+/// Lists every task due in the same calendar week as `today`: not done, dated,
+/// and that date within the week. See [`crate::date::is_due_this_week`] for what
+/// counts as "this week".
+///
+/// # Errors
+/// Returns [`StoreError::InvalidDueDate`] if a stored due date does not parse,
+/// [`StoreError::UnknownTaskState`] if a stored state does not parse, or
+/// [`StoreError::Sqlite`] if the query fails.
+pub fn tasks_due_this_week(store: &Store, today: Date) -> Result<Vec<Task>, StoreError> {
+    let mut due_this_week = Vec::new();
+    for task in undone_dated_tasks(store)? {
+        let Some(due_text) = task.due_date.as_deref() else {
+            continue;
+        };
+        let due = date::parse_due_date(due_text)?;
+        if date::is_due_this_week(due, today) {
+            due_this_week.push(task);
+        }
+    }
+    Ok(due_this_week)
+}
+
+/// Counts a project's tasks that are not yet done: [`TaskState::NotStarted`] and
+/// [`TaskState::InProgress`] both count, [`TaskState::Done`] does not.
+///
+/// # Errors
+/// Returns [`StoreError::Sqlite`] if the query fails.
+pub fn unfinished_task_count(store: &Store, project_id: i64) -> Result<i64, StoreError> {
+    store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE project_id = ?1 AND state != ?2",
+            (project_id, TaskState::Done.column_text()),
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+/// The pace `project` needs as of `today`: its unfinished task count divided by
+/// the workdays remaining until its due date. See [`crate::date::pace`] for what
+/// each edge case (no due date, a passed deadline, a weekend deadline, nothing
+/// left to do) returns and why those answers are deliberately distinct.
+///
+/// # Errors
+/// Returns [`StoreError::InvalidDueDate`] if the project's stored due date does
+/// not parse, or [`StoreError::Sqlite`] if the query fails.
+pub fn project_pace(
+    store: &Store,
+    project: &Project,
+    today: Date,
+    workdays: &[Weekday],
+) -> Result<Option<f64>, StoreError> {
+    let due_date = project
+        .due_date
+        .as_deref()
+        .map(date::parse_due_date)
+        .transpose()?;
+    let tasks_left = unfinished_task_count(store, project.id)?;
+    Ok(date::pace(tasks_left, due_date, today, workdays))
 }

@@ -16,6 +16,7 @@ mod model;
 pub use model::{Project, Subtask, Task, TaskState};
 
 pub mod command;
+pub mod date;
 pub mod query;
 
 /// Migrations embedded at compile time, applied in numbered order on open.
@@ -45,6 +46,9 @@ pub enum StoreError {
     /// A `tasks.state` value did not match any known [`TaskState`] variant.
     #[error("unknown task state {0:?}")]
     UnknownTaskState(String),
+    /// A stored due date was not valid `YYYY-MM-DD` text.
+    #[error("invalid due date {0:?}")]
+    InvalidDueDate(String),
 }
 
 /// A handle to the task store. Wraps one synchronous `SQLite` connection.
