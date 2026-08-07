@@ -93,7 +93,7 @@ Tasks:
 1. Workspace `Cargo.toml` with `members = ["crates/*", "apps/jotter"]`.
 2. Stub every crate in the architecture with an empty `lib.rs` and one `hello()`
    test that passes.
-3. `apps/jotter/src/main.rs`: build a `gtk::Application`, connect `activate`,
+3. `apps/jotter-gui/src/main.rs`: build a `gtk::Application`, connect `activate`,
    create `ApplicationWindow` titled "jotter", default size 1400x900, present it.
    Add a `HeaderBar` and a placeholder body label.
 4. Set the app id to `dev.jotter.Jotter` (reverse-DNS, stable for GTK).
@@ -138,11 +138,11 @@ Acceptance:
 ### 1b. Editor / preview toggle
 
 Tasks:
-- `crates/editor`: wrap `sourceview5::View` + `Buffer`. Load the markdown language
+- `apps/jotter-gui-editor`: wrap `sourceview5::View` + `Buffer`. Load the markdown language
   spec. Register the generated style scheme with `StyleSchemeManager`. Enable
   current-line highlight, right-margin guide, bracket matching. Line numbers off
   by default (config-gated later).
-- `crates/preview`: wrap `webkit6::WebView`. JavaScript disabled by default. Embed
+- `apps/jotter-gui-preview`: wrap `webkit6::WebView`. JavaScript disabled by default. Embed
   the preview CSS as an author `<style>` in each rendered document. Expose
   `render(html, anchor)`.
 - `crates/parser`: `markdown_to_html(src) -> String` using comrak with GFM
@@ -254,7 +254,7 @@ Shipped:
   `crates/index` and tests resolve through a closure. Links are rewritten to
   markdown links carrying `jotter-note:` or `jotter-new:`, and unresolved ones are
   styled by scheme in the preview CSS.
-- Resolution lives in `crates/app/src/links.rs`: a stem and path map rebuilt from
+- Resolution lives in `apps/jotter-gui-app/src/links.rs`: a stem and path map rebuilt from
   the index on every structural change. Bare stems match anywhere in the vault,
   case-insensitively, a `/` in the target names a vault-relative path, and a stem
   collision resolves to the lexicographically first path.
@@ -275,15 +275,15 @@ Shipped:
 - `crates/search`: a pure subsequence matcher returning a score and the matched
   byte positions. Scoring rewards word starts, adjacent runs, and the filename
   over the folder, with candidate length as the tiebreak. Smart case throughout.
-- `crates/app/src/picker.rs`: one overlay widget (entry plus list) that knows
+- `apps/jotter-gui-app/src/picker.rs`: one overlay widget (entry plus list) that knows
   nothing about what it lists. `Ctrl+O` fills it with notes ranked over path and
   title, `Ctrl+P` opens the same overlay with `>` typed, which switches it to
   commands; the leading `>` flips modes live and each key toggles it shut. The
   empty note list shows the last ten notes opened in this vault, kept in config.
-- `crates/app/src/complete.rs`: `[[` completion in a caret popover. It inserts
+- `apps/jotter-gui-app/src/complete.rs`: `[[` completion in a caret popover. It inserts
   the shortest target that reaches the note (bare stem when unique, path when
   not), which is exactly what 3a resolution expects.
-- `crates/app/src/search_panel.rs` plus `search.rs`: `Ctrl+Shift+F` swaps the
+- `apps/jotter-gui-app/src/search_panel.rs` plus `search.rs`: `Ctrl+Shift+F` swaps the
   sidebar to full-text search. Query building is a pure function; ranking is
   bm25 through the new `Index::search_notes`.
 
@@ -404,7 +404,7 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
 
 - **Keybinding sheet on `Ctrl+H`.** A window listing every binding the app has.
   `Ctrl+H` for help, chosen so insert link keeps `Ctrl+K`. It cannot drift because
-  it writes no accelerator down: `crates/app/src/keysheet.rs` names actions and
+  it writes no accelerator down: `apps/jotter-gui-app/src/keysheet.rs` names actions and
   what they do, and the label comes back from `Application::accels_for_action` at
   display time. An action with no accelerator is dropped rather than shown blank,
   and a section left empty by that goes with it. Widget-owned keys (Escape, the
@@ -425,7 +425,7 @@ Requested 2026-07-29, after phase 4 landed. Three pieces, in this order:
   onto the note's existing parent, so a rename could not leave its folder.
 
   A rename and a drag are one operation, `relocate`, so a rename now mends the
-  `[[stem]]` links it used to break silently. `crates/app/src/moves.rs` holds it:
+  `[[stem]]` links it used to break silently. `apps/jotter-gui-app/src/moves.rs` holds it:
   where a drop lands, what each affected link should say, and the plan a move has
   to read before it happens. Bare `[[stem]]` links survive a change of folder by
   design and are left alone; a change of name breaks them, so they are rewritten
