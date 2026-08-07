@@ -59,9 +59,13 @@ pub fn is_overdue(due_date: Option<Date>, done: bool, today: Date) -> bool {
 /// This is the calendar week containing `today`, not a rolling seven-day window: a
 /// task due next Monday does not read as "due this week" just because today
 /// happens to be five days out from it. A task due last Friday does not read as
-/// "due this week" either, even if today is this Monday, three days later.
+/// "due this week" either, even if today is this Monday, three days later. A task
+/// already marked done is never due this week, matching [`is_overdue`].
 #[must_use]
-pub fn is_due_this_week(due_date: Date, today: Date) -> bool {
+pub fn is_due_this_week(due_date: Date, done: bool, today: Date) -> bool {
+    if done {
+        return false;
+    }
     let days_since_monday = i64::from(today.weekday().number_days_from_monday());
     let week_start = today
         .checked_sub(Duration::days(days_since_monday))

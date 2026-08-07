@@ -44,9 +44,17 @@ fn due_this_week_uses_calendar_days_not_a_rolling_seven() {
     let later_this_week = date!(2026 - 08 - 07);
     let next_monday = date!(2026 - 08 - 10);
 
-    assert!(date::is_due_this_week(later_this_week, today));
+    assert!(date::is_due_this_week(later_this_week, false, today));
     // Six days out, well inside a rolling seven-day window, but the next calendar week.
-    assert!(!date::is_due_this_week(next_monday, today));
+    assert!(!date::is_due_this_week(next_monday, false, today));
+}
+
+#[test]
+fn a_done_task_is_never_due_this_week_even_if_its_date_falls_within_it() {
+    let today = date!(2026 - 08 - 04);
+    let this_week = date!(2026 - 08 - 07);
+
+    assert!(!date::is_due_this_week(this_week, true, today));
 }
 
 #[test]

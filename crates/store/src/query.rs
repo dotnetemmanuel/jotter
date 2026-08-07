@@ -133,8 +133,10 @@ pub fn subtasks_for_task(store: &Store, task_id: i64) -> Result<Vec<Subtask>, St
 /// Fetches every task that is not done and has a due date, for the derived
 /// listings that only ever care about tasks still needing attention.
 fn undone_dated_tasks(store: &Store) -> Result<Vec<Task>, StoreError> {
-    let sql =
-        format!("SELECT {TASK_COLUMNS} FROM tasks WHERE due_date IS NOT NULL AND state != ?1");
+    let sql = format!(
+        "SELECT {TASK_COLUMNS} FROM tasks WHERE due_date IS NOT NULL AND state != ?1
+         ORDER BY due_date IS NULL, due_date ASC, created_at ASC, id ASC"
+    );
     let mut stmt = store.conn.prepare(&sql)?;
     let rows = stmt.query_map((TaskState::Done.column_text(),), extract_task_row)?;
     let mut tasks = Vec::new();
@@ -146,6 +148,9 @@ fn undone_dated_tasks(store: &Store) -> Result<Vec<Task>, StoreError> {
 
 /// Lists every task overdue as of `today`: not done, dated, and that date already
 /// passed. See [`crate::date::is_overdue`] for the boundary cases.
+///
+/// An overdue task whose date falls in the current calendar week also appears in
+/// [`tasks_due_this_week`]; a caller showing both lists will show it twice.
 ///
 /// # Errors
 /// Returns [`StoreError::InvalidDueDate`] if a stored due date does not parse,
@@ -169,6 +174,10 @@ pub fn overdue_tasks(store: &Store, today: Date) -> Result<Vec<Task>, StoreError
 /// and that date within the week. See [`crate::date::is_due_this_week`] for what
 /// counts as "this week".
 ///
+/// A task already overdue also appears here if its date falls in the current
+/// calendar week; a caller showing both [`overdue_tasks`] and this list will show
+/// it twice.
+///
 /// # Errors
 /// Returns [`StoreError::InvalidDueDate`] if a stored due date does not parse,
 /// [`StoreError::UnknownTaskState`] if a stored state does not parse, or
@@ -180,7 +189,7 @@ pub fn tasks_due_this_week(store: &Store, today: Date) -> Result<Vec<Task>, Stor
             continue;
         };
         let due = date::parse_due_date(due_text)?;
-        if date::is_due_this_week(due, today) {
+        if date::is_due_this_week(due, false, today) {
             due_this_week.push(task);
         }
     }
