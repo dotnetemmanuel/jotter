@@ -123,13 +123,39 @@ impl Index {
         Self::init(conn)
     }
 
-    /// Shared setup: enable foreign keys per connection, then migrate.
+    /// Shared setup: enable foreign keys, WAL mode, and a busy timeout, then migrate.
     fn init(conn: Connection) -> Result<Self, IndexError> {
         // rusqlite does not enable foreign keys by default, so ON DELETE CASCADE needs this.
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // journal_mode returns the resulting mode as a row, so pragma_update cannot set it.
+        let _: String =
+            conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+        // Per connection and never persisted, so a second writer waits instead of erroring.
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         let index = Self { conn };
         index.run_migrations()?;
         Ok(index)
+    }
+
+    /// The connection's current journal mode, as `SQLite` reports it (for example
+    /// `"wal"` or `"delete"`; an in-memory database reports `"memory"`).
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn journal_mode(&self) -> Result<String, IndexError> {
+        self.conn
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .map_err(Into::into)
+    }
+
+    /// The connection's current busy timeout, in milliseconds.
+    ///
+    /// # Errors
+    /// Returns [`IndexError::Sqlite`] on query failure.
+    pub fn busy_timeout_ms(&self) -> Result<i64, IndexError> {
+        self.conn
+            .pragma_query_value(None, "busy_timeout", |row| row.get(0))
+            .map_err(Into::into)
     }
 
     /// Applies each migration whose number exceeds `user_version`, in order, in a
