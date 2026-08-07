@@ -7,6 +7,7 @@
 //! `JOTTER_CONFIG_DIR` and `JOTTER_DATA_DIR` override the answer outright, for
 //! tests that must not touch a real user's files.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use etcetera::BaseStrategy;
@@ -29,7 +30,7 @@ pub enum PathsError {
 /// Returns [`PathsError`] if the platform cannot locate the user's home directory.
 pub fn config_dir() -> Result<PathBuf, PathsError> {
     let base = etcetera::choose_base_strategy()?.config_dir();
-    Ok(resolve(std::env::var("JOTTER_CONFIG_DIR").ok().as_deref(), &base))
+    Ok(resolve(std::env::var_os("JOTTER_CONFIG_DIR").as_deref(), &base))
 }
 
 /// The directory jotter keeps its own data in.
@@ -41,17 +42,19 @@ pub fn config_dir() -> Result<PathBuf, PathsError> {
 /// Returns [`PathsError`] if the platform cannot locate the user's home directory.
 pub fn data_dir() -> Result<PathBuf, PathsError> {
     let base = etcetera::choose_base_strategy()?.data_dir();
-    Ok(resolve(std::env::var("JOTTER_DATA_DIR").ok().as_deref(), &base))
+    Ok(resolve(std::env::var_os("JOTTER_DATA_DIR").as_deref(), &base))
 }
 
 /// Resolves a directory from an optional override and the platform base directory.
 ///
 /// A non-empty override is used exactly as given, with no `jotter` component
-/// appended. Otherwise `jotter` is joined onto `base`. An empty override is
-/// treated as absent, since an unset and an empty shell variable arrive
-/// identically here.
+/// appended, even if it is not valid UTF-8: these overrides exist to sandbox
+/// tests, so a value that fails to parse must not be treated the same as one
+/// that was never set. Otherwise `jotter` is joined onto `base`. An empty
+/// override is treated as absent, since an unset and an empty shell variable
+/// arrive identically here.
 #[must_use]
-pub fn resolve(override_dir: Option<&str>, base: &Path) -> PathBuf {
+pub fn resolve(override_dir: Option<&OsStr>, base: &Path) -> PathBuf {
     match override_dir {
         Some(value) if !value.is_empty() => PathBuf::from(value),
         _ => base.join("jotter"),
