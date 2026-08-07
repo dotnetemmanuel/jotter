@@ -51,7 +51,7 @@ apps/
   ci.yml       NEW. fmt, clippy, tests per platform, and the GTK boundary guard.
 ```
 
-Flat under `apps/` is deliberate. `crates/app/src/lib.rs` reaches the repo root through three levels of `..`, and so does `apps/jotter-gui-app/src/lib.rs`, so every `include_str!` pointing at `resources/` keeps working untouched. Nesting the crates inside `apps/jotter-gui/` would add a level and break all four of them.
+Flat under `apps/` is deliberate. `crates/app/src/lib.rs` reaches the repo root through three levels of `..`, and so does `apps/jotter-gui-app/src/lib.rs`, so its `include_str!` of the logo keeps working untouched. Nesting the crates inside `apps/jotter-gui/` would add a level and break it. The three other `include_str!` call sites are in `theming` and `parser`, which do not move, so only one was ever at risk.
 
 ---
 

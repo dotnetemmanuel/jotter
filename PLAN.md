@@ -32,8 +32,9 @@ turns out wrong during implementation, change it here first, then implement.
   move to `apps/jotter-gui-app`, `apps/jotter-gui-editor` and `apps/jotter-gui-preview`.
   Flat under `apps/`, not nested inside the binary crate: `crates/app/src` reaches the
   repo root through three levels of `..` and so does `apps/jotter-gui-app/src`, which
-  keeps every `include_str!` into `resources/` working untouched. Nesting adds a level
-  and breaks all four of them.
+  keeps its `include_str!` of the logo working untouched. Nesting adds a level and
+  breaks it. The other three `include_str!` call sites live in `theming` and `parser`,
+  which never move, so only one was ever at risk.
 
 ### Notes and tasks are two different worlds
 
