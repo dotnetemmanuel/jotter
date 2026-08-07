@@ -66,6 +66,7 @@ Flat under `apps/` is deliberate. `crates/app/src/lib.rs` reaches the repo root 
 - Modify: all four moved `Cargo.toml` files (package names and path dependencies)
 - Modify: `apps/jotter-gui/src/main.rs` (crate name in `use`)
 - Modify: `install.sh`
+- Modify: `tools/gui-test/README.md` (its worked example invokes `./target/release/jotter` by name)
 - Modify: `docs/architecture.md` (the workspace layout and dependency direction blocks)
 
 **Interfaces:**
@@ -119,17 +120,21 @@ Expected: `jotter-gui` exists, `jotter` does not.
 
 The build target, the installed binary path, and the desktop entry `Exec` line all move to `jotter-gui`. Leave `APP_ID`, `Name=jotter` and the icon handling alone: changing the app id orphans the icon cache and any pinned launcher entry, and the launcher entry is still the graphical jotter as far as the user is concerned. Update the two `echo` lines at the end so they name the new binary.
 
-- [ ] **Step 11: Update the architecture doc**
+- [ ] **Step 11: Update the test harness README**
+
+`tools/gui-test/README.md` shows `cage-run.sh ./target/release/jotter` in its worked example. The script itself takes the binary as an argument and needs no change, but the example does. Check `cage-run.sh` for a hardcoded name too and correct it if there is one.
+
+- [ ] **Step 12: Update the architecture doc**
 
 `docs/architecture.md` opens with a workspace layout block and a dependency direction block. Both now describe a layout that no longer exists. Correct them to match the File Structure block above.
 
-- [ ] **Step 12: Run the GUI and confirm it is unchanged**
+- [ ] **Step 13: Run the GUI and confirm it is unchanged**
 
 Do this off-screen, per `CLAUDE.md`, with a separate `CARGO_TARGET_DIR` and sandboxed directories. Open a vault, open a note, toggle to preview, run a search.
 
 This is a relocation, so the risk is not subtle logic but a resource that silently stopped loading. Check specifically that the theme applied, the logo drew, and a fenced code block came out coloured. All three come through `include_str!` from `resources/`.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 14: Commit**
 
 Subject: `move the GTK crates into apps and rename the binary to jotter-gui`
 
